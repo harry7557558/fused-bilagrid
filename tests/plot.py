@@ -2,11 +2,13 @@ import matplotlib.pyplot as plt
 import matplotlib
 import numpy as np
 
+import torch
 import json
 import os
 
 save_dir = os.path.join(os.path.dirname(__file__), 'assets')
 os.makedirs(save_dir, exist_ok=True)
+gpu = torch.cuda.get_device_name()
 
 
 def plot_bars(title, timings):
@@ -53,16 +55,14 @@ def plot_bars(title, timings):
     plt.tight_layout()
     # plt.show()
 
+    title = f"{title.replace(' ', '_')}-{gpu.lower().replace(' ', '-')}.png"
     save_path = os.path.join(save_dir, title.replace(' ', '_')+'.png')
     plt.savefig(save_path)
 
 
 if __name__ == "__main__":
-
     with open(os.path.join(os.path.dirname(__file__), "timings.json"), 'r') as fp:
         data = json.load(fp)
 
-    
     for title, timings in data.items():
-
         plot_bars(title, timings)

@@ -1,9 +1,6 @@
 #include "config.h"
 
 #include <cooperative_groups.h>
-#include <cooperative_groups/reduce.h>
-
-namespace cg = cooperative_groups;
 
 
 __global__ void bilagrid_uniform_sample_backward_v1_kernel_bilagrid(

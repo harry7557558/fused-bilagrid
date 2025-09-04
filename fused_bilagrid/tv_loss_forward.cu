@@ -1,9 +1,5 @@
 #include <cuda_runtime.h>
 #include <cooperative_groups.h>
-#include <cooperative_groups/reduce.h>
-
-namespace cg = cooperative_groups;
-
 
 __global__ void tv_loss_forward_kernel(
     const float* __restrict__ bilagrid,  // [N,12,L,H,W]
@@ -24,7 +20,7 @@ __global__ void tv_loss_forward_kernel(
     if (inside) {
         #pragma unroll
         for (int ci = 0; ci < 12; ci++) {
-            
+
         int base = (ni*12+ci)*L*H*W;
         int cell_idx = base + (li*H+hi)*W+wi;
 
@@ -50,14 +46,6 @@ __global__ void tv_loss_forward_kernel(
         tv_sum /= (12*N);
     }
 
-#if 0
-    auto block = cg::this_thread_block();
-    cg::thread_block_tile<32> warp = cg::tiled_partition<32>(block);
-
-    tv_sum = cg::reduce(warp, tv_sum, cg::plus<float>());
-    if (warp.thread_rank() == 0)
-        atomicAdd(tv_loss, tv_sum);
-#else
     __shared__ float sharedData[256];
 
     int blockSize = blockDim.x * blockDim.y * blockDim.z;
@@ -74,9 +62,7 @@ __global__ void tv_loss_forward_kernel(
 
     if (tid == 0)
         atomicAdd(tv_loss, sharedData[0]);
-#endif
 }
-
 
 void tv_loss_forward(
     const float* bilagrid,
