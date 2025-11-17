@@ -1,7 +1,11 @@
 #include "config.h"
 
 
+#ifdef PATCHED
+__global__ void bilagrid_patched_sample_backward_kernel(
+#else
 __global__ void bilagrid_uniform_sample_backward_v2_kernel(
+#endif
     const float* __restrict__ bilagrid,  // [N,12,L,H,W]
     const float* __restrict__ rgb,  // [N,m,h,w,3]
     const float* __restrict__ v_output,  // [N,m,h,w,3]
@@ -9,6 +13,10 @@ __global__ void bilagrid_uniform_sample_backward_v2_kernel(
     float* __restrict__ v_rgb,  // [N,m,h,w,3]
     int N, int L, int H, int W,
     int m, int h, int w
+#ifdef PATCHED
+    , int h0, int w0,
+    const int* offsets  // [N,m,2]
+#endif
 ) {
     #if 0
     int wi = blockIdx.x * blockDim.x + threadIdx.x;
@@ -33,8 +41,14 @@ __global__ void bilagrid_uniform_sample_backward_v2_kernel(
     sb = isfinite(sb) ? sb : 0.5f;
 
     // grid coords
+#ifdef PATCHED
+    offsets += (ni * m + mi) * 2;
+    float x = (float)(wi + offsets[0]) / (float)(w0-1) * (float)(W-1);
+    float y = (float)(hi + offsets[1]) / (float)(h0-1) * (float)(H-1);
+#else
     float x = (float)wi / (float)(w-1) * (float)(W-1);
     float y = (float)hi / (float)(h-1) * (float)(H-1);
+#endif
     float z = (kC2G_r * sr + kC2G_g * sg + kC2G_b * sb) * (L-1);
 
     // floor + ceil, clamped
@@ -96,27 +110,4 @@ __global__ void bilagrid_uniform_sample_backward_v2_kernel(
     v_rgb[g_off+0] = vr + kC2G_r * gz_grad;
     v_rgb[g_off+1] = vg + kC2G_g * gz_grad;
     v_rgb[g_off+2] = vb + kC2G_b * gz_grad;
-}
-
-
-void bilagrid_uniform_sample_backward_v2(
-    const float* bilagrid,
-    const float* rgb,
-    const float* v_output,
-    float* v_bilagrid,
-    float* v_rgb,
-    int N, int L, int H, int W,
-    int m, int h, int w
-) {
-    dim3 block = { 16, 16, 1 };
-    dim3 bounds = {
-        (w +block.x-1)/block.x,
-        (h +block.y-1)/block.y,
-        (N*m +block.z-1)/block.z
-    };
-    bilagrid_uniform_sample_backward_v2_kernel<<<bounds, block>>>(
-        bilagrid, rgb, v_output,
-        v_bilagrid, v_rgb,
-        N, L, H, W, m, h, w
-    );
 }

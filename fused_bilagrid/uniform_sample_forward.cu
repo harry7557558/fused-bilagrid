@@ -1,12 +1,20 @@
 #include "config.h"
 
 
+#ifdef PATCHED
+__global__ void bilagrid_patched_sample_forward_kernel(
+#else
 __global__ void bilagrid_uniform_sample_forward_kernel(
+#endif
     const float* __restrict__ bilagrid, // [N,12,L,H,W]
     const float* __restrict__ rgb,  // [N,m,h,w,3]
     float* __restrict__ output,  // [N,m,h,w,3]
     int N, int L, int H, int W,
     int m, int h, int w
+#ifdef PATCHED
+    , int h0, int w0,
+    const int* offsets  // [N,m,2]
+#endif
 ) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int total = N * m * h * w;
@@ -28,8 +36,14 @@ __global__ void bilagrid_uniform_sample_forward_kernel(
     float dr = 0.0, dg = 0.0, db = 0.0;
 
     // grid coords
+#ifdef PATCHED
+    offsets += (ni * m + mi) * 2;
+    float gx = (float)(wi + offsets[0]) / (float)(w0-1);
+    float gy = (float)(hi + offsets[1]) / (float)(h0-1);
+#else
     float gx = (float)wi / (float)(w-1);
     float gy = (float)hi / (float)(h-1);
+#endif
     float gz = kC2G_r * sr + kC2G_g * sg + kC2G_b * sb;
     float x = gx * (W - 1);
     float y = gy * (H - 1);
@@ -85,22 +99,4 @@ __global__ void bilagrid_uniform_sample_forward_kernel(
     output[g_offset+0] = isfinite(dr) ? dr : 0.5f;
     output[g_offset+1] = isfinite(dg) ? dg : 0.5f;
     output[g_offset+2] = isfinite(db) ? db : 0.5f;
-}
-
-
-void bilagrid_uniform_sample_forward(
-    const float* bilagrid,
-    const float* rgb,
-    float* output,
-    int N, int L, int H, int W,
-    int m, int h, int w
-) {
-    int total = N * m * h * w;
-    int threads = 256;
-    int blocks = (total + threads - 1) / threads;
-    bilagrid_uniform_sample_forward_kernel<<<blocks, threads>>>(
-        bilagrid, rgb, output,
-        N, L, H, W, m, h, w
-    );
-    // cudaDeviceSynchronize();
 }

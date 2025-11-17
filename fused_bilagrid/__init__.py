@@ -59,6 +59,24 @@ class _FusedUniformGridSample(torch.autograd.Function):
             ), None
 
 
+class _FusedPatchedGridSample(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, bilagrid, rgb, h0, w0, offsets):
+        with torch.cuda.device(bilagrid.device):
+            output = _C.bilagrid_patched_sample_forward(bilagrid, rgb, h0, w0, offsets)
+        ctx.save_for_backward(bilagrid, rgb, offsets)
+        ctx.h0, ctx.w0 = h0, w0
+        return output
+
+    @staticmethod
+    def backward(ctx, v_output):
+        bilagrid, rgb, offsets = ctx.saved_tensors
+        with torch.cuda.device(bilagrid.device):
+            return *_C.bilagrid_patched_sample_backward(
+                bilagrid, rgb, ctx.h0, ctx.w0, offsets, v_output.contiguous(),
+            ), None, None, None
+
+
 class _FusedTotalVariationLoss(torch.autograd.Function):
     @staticmethod
     def forward(ctx, bilagrid):
@@ -76,7 +94,17 @@ class _FusedTotalVariationLoss(torch.autograd.Function):
             return _C.tv_loss_backward(bilagrid, v_output.contiguous())
 
 
-def fused_bilagrid_sample(bilagrid, coords, rgb, compute_coords_grad=False):
+def fused_bilagrid_sample(
+        bilagrid, coords, rgb, compute_coords_grad=False,
+        actual_height=None, actual_width=None, patch_offsets=None
+    ):
+    if actual_height is not None and actual_width is not None and patch_offsets is not None:
+        return _FusedPatchedGridSample.apply(
+            bilagrid.float().contiguous(),
+            rgb.float().contiguous(),
+            actual_height, actual_width,
+            patch_offsets.contiguous()
+        )
     if coords is not None:
         return _FusedGridSample.apply(
             bilagrid.float().contiguous(),
@@ -103,7 +131,10 @@ def total_variation_loss(x: torch.Tensor):
     return _FusedTotalVariationLoss.apply(x.float().contiguous())
 
 
-def slice(bil_grids, xy, rgb, grid_idx, compute_coords_grad=False):
+def slice(
+        bil_grids, xy, rgb, grid_idx, compute_coords_grad=False,
+        actual_height=None, actual_width=None, patch_offsets=None
+    ):
     """Slices a batch of 3D bilateral grids by pixel coordinates `xy` and gray-scale guidances of pixel colors `rgb`.
 
     Supports 2-D, 3-D, and 4-D input shapes. The first dimension of the input is the batch size
@@ -127,6 +158,7 @@ def slice(bil_grids, xy, rgb, grid_idx, compute_coords_grad=False):
         xy (Optional[torch.Tensor]): The x-y coordinates of shape $(..., 2)$ in the range of $[0,1]$.
         rgb (torch.Tensor): The RGB values of shape $(..., 3)$ for computing the guidance coordinates, ranging in $[0,1]$.
         grid_idx (torch.Tensor): The indices of bilateral grids for each slicing. Shape: $(..., 1)$.
+        actual_width (Optional[int]), actual_height (Optional[int]), patch_offsets (Optional[torch.Tensor]): Used for patched batching mode.
 
     Returns:
         {
@@ -154,7 +186,7 @@ def slice(bil_grids, xy, rgb, grid_idx, compute_coords_grad=False):
         else:
             raise ValueError("The input to bilateral grid slicing is not supported yet.")
 
-    rgb = bil_grids(xy, rgb, grid_idx, compute_coords_grad)
+    rgb = bil_grids(xy, rgb, grid_idx, compute_coords_grad, actual_height, actual_width, patch_offsets)
 
     return {
         "rgb": rgb.reshape(*sh_),
@@ -271,7 +303,10 @@ class BilateralGrid(nn.Module):
         """Computes and returns total variation loss on the bilateral grids."""
         return total_variation_loss(self.grids)
 
-    def forward(self, grid_xy, rgb, idx=None, compute_coords_grad=False):
+    def forward(
+            self, grid_xy, rgb, idx=None, compute_coords_grad=False,
+            actual_height=None, actual_width=None, patch_offsets=None
+        ):
         """Bilateral grid slicing. Supports 2-D, 3-D, 4-D, and 5-D input.
         For the 2-D, 3-D, and 4-D cases, please refer to `slice`.
         For the 5-D cases, `idx` will be unused and the first dimension of `xy` should be
@@ -305,7 +340,10 @@ class BilateralGrid(nn.Module):
         if idx is not None:
             grids = grids[idx]
 
-        rgb = fused_bilagrid_sample(grids, grid_xy, rgb, compute_coords_grad)
+        rgb = fused_bilagrid_sample(
+            grids, grid_xy, rgb, compute_coords_grad,
+            actual_height, actual_width, patch_offsets
+        )
 
         for _ in range(5 - input_ndims):
             rgb = rgb.squeeze(1)
