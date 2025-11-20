@@ -42,18 +42,6 @@ void bilagrid_patched_sample_forward(
     int m, int h, int w, int h0, int w0
 );
 
-void bilagrid_patched_sample_backward(
-    const float* bilagrid,
-    const float* rgb,
-    const int* offsets,
-    const float* v_output,
-    float* v_bilagrid,
-    float* v_rgb,
-    int N, int L, int H, int W,
-    int m, int h, int w, int h0, int w0
-);
-
-
 void bilagrid_uniform_sample_backward_v1(
     const float* bilagrid,
     const float* rgb,
@@ -66,6 +54,20 @@ void bilagrid_uniform_sample_backward_v1(
     const int target_tile_size
 );
 
+void bilagrid_patched_sample_backward_v1(
+    const float* bilagrid,
+    const float* rgb,
+    const int* offsets,
+    const float* v_output,
+    float* v_bilagrid,
+    float* v_rgb,
+    int N, int L, int H, int W,
+    int m, int h, int w, int h0, int w0,
+    const unsigned block_x, const unsigned block_y,
+    const int target_tile_size,
+    const int mi_batch_size
+);
+
 void bilagrid_uniform_sample_backward_v2(
     const float* bilagrid,
     const float* rgb,
@@ -74,6 +76,17 @@ void bilagrid_uniform_sample_backward_v2(
     float* v_rgb,
     int N, int L, int H, int W,
     int m, int h, int w
+);
+
+void bilagrid_patched_sample_backward_v2(
+    const float* bilagrid,
+    const float* rgb,
+    const int* offsets,
+    const float* v_output,
+    float* v_bilagrid,
+    float* v_rgb,
+    int N, int L, int H, int W,
+    int m, int h, int w, int h0, int w0
 );
 
 
@@ -270,7 +283,8 @@ bilagrid_patched_sample_backward_tensor(
     auto v_bilagrid = torch::zeros({N,12,L,H,W}, opts);
     auto v_rgb = torch::empty({N,m,h,w,3}, opts);
 
-    bilagrid_patched_sample_backward(
+    bilagrid_patched_sample_backward_v2(
+    // bilagrid_patched_sample_backward_v1(
         bilagrid.data_ptr<float>(),
         rgb.data_ptr<float>(),
         offsets.data_ptr<int>(),
@@ -278,6 +292,7 @@ bilagrid_patched_sample_backward_tensor(
         v_bilagrid.data_ptr<float>(),
         v_rgb.data_ptr<float>(),
         N, L, H, W, m, h, w, h0, w0
+        // , 8, 8, 4, 1
     );
 
     return std::make_tuple(v_bilagrid, v_rgb);

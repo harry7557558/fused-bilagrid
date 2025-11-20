@@ -18,6 +18,7 @@ fallback_archs = [
     "-gencode=arch=compute_75,code=sm_75",
     "-gencode=arch=compute_80,code=sm_80",
     "-gencode=arch=compute_89,code=sm_89",
+    "-gencode=arch=compute_120,code=sm_120",
 ]
 
 nvcc_args = [
@@ -25,6 +26,7 @@ nvcc_args = [
     #"--maxrregcount=32",
     "--use_fast_math",
 ]
+nvcc_args += ["-lineinfo", "--generate-line-info", "--source-in-ptx"]
 
 detected_arch = None
 
