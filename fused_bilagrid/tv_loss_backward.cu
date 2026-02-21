@@ -1,9 +1,10 @@
 #include "config.h"
 
+template<int C>
 __global__ void tv_loss_backward_kernel(
-    const float* __restrict__ bilagrid,   // [N,12,L,H,W]
+    const float* __restrict__ bilagrid,   // [N,C,L,H,W]
     const float v_tv_loss,                   // scalar gradient dL/d(tv_loss)
-    float* __restrict__ v_bilagrid,     // [N,12,L,H,W]
+    float* __restrict__ v_bilagrid,     // [N,C,L,H,W]
     int N, int L, int H, int W
 ) {
     int wi = blockIdx.x * blockDim.x + threadIdx.x;
@@ -19,9 +20,9 @@ __global__ void tv_loss_backward_kernel(
     float sy = s / (float)(L * (H - 1) * W);
     float sz = s / (float)((L - 1) * H * W);
 
-    for (int ci = 0; ci < 12; ci++) {
+    for (int ci = 0; ci < C; ci++) {
 
-        int cell_idx = (((ni * 12 + ci) * L + li) * H + hi) * W + wi;
+        int cell_idx = (((ni * C + ci) * L + li) * H + hi) * W + wi;
 
         float half_grad = 0.0f;
         float val = bilagrid[cell_idx];
@@ -60,7 +61,7 @@ void tv_loss_backward(
     const float* bilagrid,
     const float v_tv_loss,
     float* v_bilagrid,
-    int N, int L, int H, int W,
+    int N, int C, int L, int H, int W,
     cudaStream_t stream
 ) {
     dim3 block(4, 4, 4);
@@ -69,8 +70,13 @@ void tv_loss_backward(
         (H + block.y - 1) / block.y,
         (N*L + block.z - 1) / block.z
     );
-    tv_loss_backward_kernel<<<grid, block, 0, stream>>>(
-        bilagrid, v_tv_loss, v_bilagrid, N, L, H, W
-    );
+    if (C == 12)
+        tv_loss_backward_kernel<12><<<grid, block, 0, stream>>>(
+            bilagrid, v_tv_loss, v_bilagrid, N, L, H, W
+        );
+    else if (C == 9)
+        tv_loss_backward_kernel<9><<<grid, block, 0, stream>>>(
+            bilagrid, v_tv_loss, v_bilagrid, N, L, H, W
+        );
     CHECK_DEVICE_ERROR;
 }

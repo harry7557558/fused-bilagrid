@@ -59,6 +59,25 @@ class _FusedUniformGridSample(torch.autograd.Function):
             ), None
 
 
+class _FusedUniformGridPPISPSample(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, bilagrid, rgb, _args):
+        with torch.cuda.device(bilagrid.device):
+            output = _C.bilagrid_ppisp_uniform_sample_forward(bilagrid, rgb)
+        ctx.save_for_backward(bilagrid, rgb)
+        ctx._args = _args
+        return output
+
+    @staticmethod
+    def backward(ctx, v_output):
+        bilagrid, rgb = ctx.saved_tensors
+        with torch.cuda.device(bilagrid.device):
+            return *_C.bilagrid_ppisp_uniform_sample_backward(
+                bilagrid, rgb, v_output.contiguous(),
+                *ctx._args
+            ), None
+
+
 class _FusedPatchedGridSample(torch.autograd.Function):
     @staticmethod
     def forward(ctx, bilagrid, rgb, h0, w0, offsets):
@@ -77,10 +96,28 @@ class _FusedPatchedGridSample(torch.autograd.Function):
             ), None, None, None
 
 
+class _FusedPatchedGridPPISPSample(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, bilagrid, rgb, h0, w0, offsets):
+        with torch.cuda.device(bilagrid.device):
+            output = _C.bilagrid_ppisp_patched_sample_forward(bilagrid, rgb, h0, w0, offsets)
+        ctx.save_for_backward(bilagrid, rgb, offsets)
+        ctx.h0, ctx.w0 = h0, w0
+        return output
+
+    @staticmethod
+    def backward(ctx, v_output):
+        bilagrid, rgb, offsets = ctx.saved_tensors
+        with torch.cuda.device(bilagrid.device):
+            return *_C.bilagrid_ppisp_patched_sample_backward(
+                bilagrid, rgb, ctx.h0, ctx.w0, offsets, v_output.contiguous(),
+            ), None, None, None
+
+
 class _FusedTotalVariationLoss(torch.autograd.Function):
     @staticmethod
     def forward(ctx, bilagrid):
-        assert bilagrid.ndim == 5 and bilagrid.shape[1] == 12, bilagrid.shape
+        assert bilagrid.ndim == 5 and bilagrid.shape[1] in [9, 12], bilagrid.shape
         assert bilagrid.shape[-3] >= 2 and bilagrid.shape[-2] >= 2 and bilagrid.shape[-1] >= 2, bilagrid.shape
 
         ctx.save_for_backward(bilagrid)
@@ -116,6 +153,36 @@ def fused_bilagrid_sample(
         args = choose_uniform_sample_backward_args(*map(int, rgb.shape[-3:-1]), *map(int, bilagrid.shape[-3:]))
         # args = (1, 8, 8, 5)
         return _FusedUniformGridSample.apply(
+            bilagrid.float().contiguous(),
+            rgb.float().contiguous(),
+            args
+        )
+
+
+def fused_bilagrid_ppisp_sample(
+        bilagrid, coords, rgb, compute_coords_grad=False,
+        actual_height=None, actual_width=None, patch_offsets=None
+    ):
+    if actual_height is not None and actual_width is not None and patch_offsets is not None:
+        return _FusedPatchedGridPPISPSample.apply(
+            bilagrid.float().contiguous(),
+            rgb.float().contiguous(),
+            actual_height, actual_width,
+            patch_offsets.contiguous()
+        )
+    if coords is not None:
+        raise NotImplementedError()
+        return _FusedGridPPISPSample.apply(
+            bilagrid.float().contiguous(),
+            coords.float().contiguous(),
+            rgb.float().contiguous(),
+            compute_coords_grad
+        )
+    else:
+        # TODO: re-calibrate
+        args = choose_uniform_sample_backward_args(*map(int, rgb.shape[-3:-1]), *map(int, bilagrid.shape[-3:]))
+        # args = (1, 8, 8, 5)
+        return _FusedUniformGridPPISPSample.apply(
             bilagrid.float().contiguous(),
             rgb.float().contiguous(),
             args
@@ -292,6 +359,8 @@ class BilateralGrid(nn.Module):
         self.grids = nn.Parameter(grid.tile(num, 1, 1, 1, 1))  # (N, 12, L, H, W)
         """ A 5-D tensor of shape $(N, 12, L, H, W)$."""
 
+        self.fused_bilagrid_sample = fused_bilagrid_sample
+
     def _init_identity_grid(self):
         grid = torch.eye(4)[:3].float()
         grid = grid.repeat([self.grid_guidance * self.grid_height * self.grid_width, 1])  # (L * H * W, 12)
@@ -340,7 +409,7 @@ class BilateralGrid(nn.Module):
         if idx is not None:
             grids = grids[idx]
 
-        rgb = fused_bilagrid_sample(
+        rgb = self.fused_bilagrid_sample(
             grids, grid_xy, rgb, compute_coords_grad,
             actual_height, actual_width, patch_offsets
         )
@@ -349,3 +418,27 @@ class BilateralGrid(nn.Module):
             rgb = rgb.squeeze(1)
 
         return rgb
+
+
+class BilateralGridPPISP(BilateralGrid):
+
+    def __init__(self, num, grid_X=16, grid_Y=16, grid_W=8):
+        """
+        Args:
+            num (int): The number of bilateral grids (i.e., the number of views).
+            grid_X (int): Defines grid width $W$.
+            grid_Y (int): Defines grid height $H$.
+            grid_W (int): Defines grid guidance dimension $L$.
+        """
+        super(BilateralGridPPISP, self).__init__(num, grid_X, grid_Y, grid_W)
+
+        # Initialize grids.
+        grid = self._init_identity_grid()
+        self.grids = nn.Parameter(grid.tile(num, 1, 1, 1, 1))  # (N, 12, L, H, W)
+        """ A 5-D tensor of shape $(N, 9, L, H, W)$."""
+
+        self.fused_bilagrid_sample = fused_bilagrid_ppisp_sample
+
+    def _init_identity_grid(self):
+        grid = torch.zeros(1, 9, self.grid_guidance, self.grid_height, self.grid_width)
+        return grid

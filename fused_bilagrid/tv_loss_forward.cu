@@ -7,27 +7,28 @@
 namespace cg = cooperative_groups;
 
 
+template<int C>
 __global__ void tv_loss_forward_kernel(
-    const float* __restrict__ bilagrid,  // [N,12,L,H,W]
+    const float* __restrict__ bilagrid,  // [N,C,L,H,W]
     float* __restrict__ tv_loss,
     int N, int L, int H, int W
 ) {
     int wi = blockIdx.x * blockDim.x + threadIdx.x;
     int hi = blockIdx.y * blockDim.y + threadIdx.y;
     int idx = blockIdx.z * blockDim.z + threadIdx.z;
-    // bool inside = (wi < W && hi < H && idx < (L*12*N));
+    // bool inside = (wi < W && hi < H && idx < (L*C*N));
     bool inside = (wi < W && hi < H && idx < (L*N));
     int li = idx % L; idx /= L;
-    // int ci = idx % 12; idx /= 12;
+    // int ci = idx % C; idx /= C;
     int ni = idx;
 
     float tv_sum = 0.0f;
 
     if (inside) {
         #pragma unroll
-        for (int ci = 0; ci < 12; ci++) {
+        for (int ci = 0; ci < C; ci++) {
             
-        int base = (ni*12+ci)*L*H*W;
+        int base = (ni*C+ci)*L*H*W;
         int cell_idx = base + (li*H+hi)*W+wi;
 
         float val = bilagrid[cell_idx];
@@ -49,7 +50,7 @@ __global__ void tv_loss_forward_kernel(
         }
 
         }  // ci
-        tv_sum /= (12*N);
+        tv_sum /= (C*N);
     }
 
 #if 0
@@ -83,19 +84,25 @@ __global__ void tv_loss_forward_kernel(
 void tv_loss_forward(
     const float* bilagrid,
     float* tv_loss,
-    int N, int L, int H, int W,
+    int N, int C, int L, int H, int W,
     cudaStream_t stream
 ) {
     dim3 block = { 4, 4, 4 };
     dim3 bounds = {
         (W +block.x-1)/block.x,
         (H +block.y-1)/block.y,
-        // (N*12*L +block.z-1)/block.z
+        // (N*C*L +block.z-1)/block.z
         (N*L +block.z-1)/block.z
     };
-    tv_loss_forward_kernel<<<bounds, block, 0, stream>>>(
-        bilagrid, tv_loss,
-        N, L, H, W
-    );
+    if (C == 12)
+        tv_loss_forward_kernel<12><<<bounds, block, 0, stream>>>(
+            bilagrid, tv_loss,
+            N, L, H, W
+        );
+    else if (C == 9)
+        tv_loss_forward_kernel<9><<<bounds, block, 0, stream>>>(
+            bilagrid, tv_loss,
+            N, L, H, W
+        );
     CHECK_DEVICE_ERROR;
 }
