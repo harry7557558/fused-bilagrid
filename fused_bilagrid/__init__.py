@@ -40,6 +40,45 @@ class _FusedGridSample(torch.autograd.Function):
             ), None
 
 
+class _FusedGridPPISPSample(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, bilagrid, coords, rgb, compute_coords_grad=False):
+        with torch.cuda.device(bilagrid.device):
+            output = _C.bilagrid_ppisp_sample_forward(bilagrid, coords, rgb)
+        ctx.save_for_backward(bilagrid, coords, rgb)
+        ctx.compute_coords_grad = compute_coords_grad
+        return output
+
+    @staticmethod
+    def backward(ctx, v_output):
+        bilagrid, coords, rgb = ctx.saved_tensors
+        with torch.cuda.device(bilagrid.device):
+            return *_C.bilagrid_ppisp_sample_backward(
+                bilagrid, coords, rgb, v_output.contiguous(),
+                ctx.compute_coords_grad
+            ), None
+
+
+class _FusedPackedGridPPISPSample(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, bilagrid, image_indices, coords, rgb, compute_coords_grad=False):
+        with torch.cuda.device(bilagrid.device):
+            output = _C.bilagrid_ppisp_packed_sample_forward(bilagrid, image_indices, coords, rgb)
+        ctx.save_for_backward(bilagrid, image_indices, coords, rgb)
+        ctx.compute_coords_grad = compute_coords_grad
+        return output
+
+    @staticmethod
+    def backward(ctx, v_output):
+        bilagrid, image_indices, coords, rgb = ctx.saved_tensors
+        with torch.cuda.device(bilagrid.device):
+            v_bilagrid, v_coords, v_rgb = _C.bilagrid_ppisp_packed_sample_backward(
+                bilagrid, image_indices, coords, rgb, v_output.contiguous(),
+                ctx.compute_coords_grad
+            )
+        return v_bilagrid, None, v_coords, v_rgb, None
+
+
 class _FusedUniformGridSample(torch.autograd.Function):
     @staticmethod
     def forward(ctx, bilagrid, rgb, _args):
@@ -118,7 +157,7 @@ class _FusedTotalVariationLoss(torch.autograd.Function):
     @staticmethod
     def forward(ctx, bilagrid):
         assert bilagrid.ndim == 5 and bilagrid.shape[1] in [9, 12], bilagrid.shape
-        assert bilagrid.shape[-3] >= 2 and bilagrid.shape[-2] >= 2 and bilagrid.shape[-1] >= 2, bilagrid.shape
+        # assert bilagrid.shape[-3] >= 2 and bilagrid.shape[-2] >= 2 and bilagrid.shape[-1] >= 2, bilagrid.shape
 
         ctx.save_for_backward(bilagrid)
         with torch.cuda.device(bilagrid.device):
@@ -161,17 +200,27 @@ def fused_bilagrid_sample(
 
 def fused_bilagrid_ppisp_sample(
         bilagrid, coords, rgb, compute_coords_grad=False,
-        actual_height=None, actual_width=None, patch_offsets=None
+        actual_height=None, actual_width=None, patch_offsets=None,
+        image_indices=None
     ):
     if actual_height is not None and actual_width is not None and patch_offsets is not None:
+        if image_indices is not None:
+            raise UserWarning("Arguments for both patched sample and packed sample are provided. Using patched sample.")
         return _FusedPatchedGridPPISPSample.apply(
             bilagrid.float().contiguous(),
             rgb.float().contiguous(),
             actual_height, actual_width,
             patch_offsets.contiguous()
         )
+    if image_indices is not None:
+        return _FusedPackedGridPPISPSample.apply(
+            bilagrid.float().contiguous(),
+            image_indices.contiguous(),
+            coords.float().contiguous(),
+            rgb.float().contiguous(),
+            compute_coords_grad
+        )
     if coords is not None:
-        raise NotImplementedError()
         return _FusedGridPPISPSample.apply(
             bilagrid.float().contiguous(),
             coords.float().contiguous(),
