@@ -250,12 +250,26 @@ void tv_loss_forward(
     cudaStream_t stream
 );
 
-
 void tv_loss_backward(
     const float* bilagrid,
     const float v_tv_loss,
     float* v_bilagrid,
+    int N, int C, int L, int H, int W, bool inplace,
+    cudaStream_t stream
+);
+
+void channel_mean_forward(
+    const float* bilagrid,
+    float* channel_mean,
     int N, int C, int L, int H, int W,
+    cudaStream_t stream
+);
+
+void channel_mean_backward(
+    const float* bilagrid,
+    const float* v_tv_loss,
+    float* v_bilagrid,
+    int N, int C, int L, int H, int W, bool inplace,
     cudaStream_t stream
 );
 
@@ -897,13 +911,93 @@ torch::Tensor tv_loss_backward_tensor(
     int N = bilagrid.size(0), C = bilagrid.size(1), L = bilagrid.size(2),
         H = bilagrid.size(3), W = bilagrid.size(4);
 
-    auto v_bilagrid = torch::zeros_like(bilagrid);
+    auto v_bilagrid = torch::empty_like(bilagrid);
 
     tv_loss_backward(
         bilagrid.data_ptr<float>(),
         v_tv_loss.item<float>(),
         v_bilagrid.data_ptr<float>(),
+        N, C, L, H, W, false,
+        at::cuda::getCurrentCUDAStream()
+    );
+
+    return v_bilagrid;
+}
+
+
+torch::Tensor tv_loss_backward_inplace_tensor(
+    torch::Tensor bilagrid,  // [N,C,L,H,W]
+    torch::Tensor v_tv_loss,  // scalar
+    torch::Tensor v_bilagrid  // [N,C,L,H,W]
+) {
+    int N = bilagrid.size(0), C = bilagrid.size(1), L = bilagrid.size(2),
+        H = bilagrid.size(3), W = bilagrid.size(4);
+
+    tv_loss_backward(
+        bilagrid.data_ptr<float>(),
+        v_tv_loss.item<float>(),
+        v_bilagrid.data_ptr<float>(),
+        N, C, L, H, W, true,
+        at::cuda::getCurrentCUDAStream()
+    );
+
+    return v_bilagrid;
+}
+
+
+torch::Tensor channel_mean_forward_tensor(
+    torch::Tensor bilagrid  // [N,C,L,H,W]
+) {
+    int N = bilagrid.size(0), C = bilagrid.size(1), L = bilagrid.size(2),
+        H = bilagrid.size(3), W = bilagrid.size(4);
+
+    auto channel_mean = torch::zeros({C}, bilagrid.options());
+
+    channel_mean_forward(
+        bilagrid.data_ptr<float>(),
+        channel_mean.data_ptr<float>(),
         N, C, L, H, W,
+        at::cuda::getCurrentCUDAStream()
+    );
+    
+    return channel_mean;
+}
+
+
+torch::Tensor channel_mean_backward_tensor(
+    torch::Tensor bilagrid,  // [N,C,L,H,W]
+    torch::Tensor v_channel_mean  // scalar
+) {
+    int N = bilagrid.size(0), C = bilagrid.size(1), L = bilagrid.size(2),
+        H = bilagrid.size(3), W = bilagrid.size(4);
+
+    auto v_bilagrid = torch::empty_like(bilagrid);
+
+    channel_mean_backward(
+        bilagrid.data_ptr<float>(),
+        v_channel_mean.data_ptr<float>(),
+        v_bilagrid.data_ptr<float>(),
+        N, C, L, H, W, false,
+        at::cuda::getCurrentCUDAStream()
+    );
+
+    return v_bilagrid;
+}
+
+
+torch::Tensor channel_mean_backward_inplace_tensor(
+    torch::Tensor bilagrid,  // [N,C,L,H,W]
+    torch::Tensor v_channel_mean,  // scalar
+    torch::Tensor v_bilagrid  // [N,C,L,H,W]
+) {
+    int N = bilagrid.size(0), C = bilagrid.size(1), L = bilagrid.size(2),
+        H = bilagrid.size(3), W = bilagrid.size(4);
+
+    channel_mean_backward(
+        bilagrid.data_ptr<float>(),
+        v_channel_mean.data_ptr<float>(),
+        v_bilagrid.data_ptr<float>(),
+        N, C, L, H, W, true,
         at::cuda::getCurrentCUDAStream()
     );
 

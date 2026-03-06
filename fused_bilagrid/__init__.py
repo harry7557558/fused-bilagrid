@@ -207,6 +207,22 @@ class _FusedTotalVariationLoss(torch.autograd.Function):
             return _C.tv_loss_backward(bilagrid, v_output.contiguous())
 
 
+class _FusedChannelMean(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, bilagrid):
+        assert bilagrid.ndim == 5 and bilagrid.shape[1] in [9, 12], bilagrid.shape
+
+        ctx.save_for_backward(bilagrid)
+        with torch.cuda.device(bilagrid.device):
+            return _C.channel_mean_forward(bilagrid)
+
+    @staticmethod
+    def backward(ctx, v_output):
+        (bilagrid,) = ctx.saved_tensors
+        with torch.cuda.device(bilagrid.device):
+            return _C.channel_mean_backward(bilagrid, v_output.contiguous())
+
+
 def fused_bilagrid_sample(
         bilagrid, coords, rgb, compute_coords_grad=False,
         actual_height=None, actual_width=None, patch_offsets=None
@@ -324,6 +340,16 @@ def total_variation_loss(x: torch.Tensor):
         x (torch.Tensor): The input tensor with shape $(B, 12, L, H, W)$, where $B$ is the batch size.
     """
     return _FusedTotalVariationLoss.apply(x.float().contiguous())
+
+
+def channel_mean(x: torch.Tensor):
+    """Returns total variation on multi-dimensional tensors.
+
+    Args:
+        x (torch.Tensor): The input tensor with shape $(B, 12, L, H, W)$, where $B$ is the batch size.
+    """
+    return _FusedChannelMean.apply(x.float().contiguous())
+
 
 
 def slice(

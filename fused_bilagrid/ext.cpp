@@ -21,4 +21,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("bilagrid_loglinear_patched_sample_backward", &bilagrid_loglinear_patched_sample_backward_tensor);
     m.def("tv_loss_forward", &tv_loss_forward_tensor);
     m.def("tv_loss_backward", &tv_loss_backward_tensor);
+    m.def("tv_loss_backward_inplace", &tv_loss_backward_inplace_tensor);
+    m.def("channel_mean_forward", &channel_mean_forward_tensor);
+    m.def("channel_mean_backward", &channel_mean_backward_tensor);
+    m.def("channel_mean_backward_inplace", &channel_mean_backward_inplace_tensor);
 }

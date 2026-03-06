@@ -61,14 +61,15 @@ __global__ void tv_loss_forward_kernel(
     if (warp.thread_rank() == 0)
         atomicAdd(tv_loss, tv_sum);
 #else
-    __shared__ float sharedData[256];
+    static constexpr int blockSize = 64;
+    __shared__ float sharedData[blockSize];
 
-    int blockSize = blockDim.x * blockDim.y * blockDim.z;
     int tid = (threadIdx.z * blockDim.y + threadIdx.y) * blockDim.x + threadIdx.x;
 
     sharedData[tid] = tv_sum;
     __syncthreads();
 
+    #pragma unroll
     for (int s = blockSize / 2; s > 0; s >>= 1) {
         if (tid < s)
             sharedData[tid] += sharedData[tid + s];
@@ -87,6 +88,7 @@ void tv_loss_forward(
     int N, int C, int L, int H, int W,
     cudaStream_t stream
 ) {
+    // TODO: optimize memory access pattern
     dim3 block = { 4, 4, 4 };
     dim3 bounds = {
         (W +block.x-1)/block.x,
@@ -102,6 +104,82 @@ void tv_loss_forward(
     else if (C == 9)
         tv_loss_forward_kernel<9><<<bounds, block, 0, stream>>>(
             bilagrid, tv_loss,
+            N, L, H, W
+        );
+    CHECK_DEVICE_ERROR;
+}
+
+
+
+template<int C>
+__global__ void channel_mean_forward_kernel(
+    const float* __restrict__ bilagrid,  // [N,C,L,H,W]
+    float* __restrict__ channel_mean,  // [C]
+    int N, int L, int H, int W
+) {
+    int wi = blockIdx.x * blockDim.x + threadIdx.x;
+    int hi = blockIdx.y * blockDim.y + threadIdx.y;
+    int idx = blockIdx.z * blockDim.z + threadIdx.z;
+    // bool inside = (wi < W && hi < H && idx < (L*C*N));
+    bool inside = (wi < W && hi < H && idx < (L*N));
+    int li = idx % L; idx /= L;
+    // int ci = idx % C; idx /= C;
+    int ni = idx;
+
+    static constexpr int blockSize = 64;
+    __shared__ float sharedData[blockSize];
+    int tid = (threadIdx.z * blockDim.y + threadIdx.y) * blockDim.x + threadIdx.x;
+
+    #pragma unroll
+    for (int ci = 0; ci < C; ci++) {
+
+        float val = 0.0f;
+
+        if (inside) {
+            int base = (ni*C+ci)*L*H*W;
+            int cell_idx = base + (li*H+hi)*W+wi;
+            val = bilagrid[cell_idx];
+        }
+
+        sharedData[tid] = val;
+        __syncthreads();
+
+        #pragma unroll
+        for (int s = blockSize / 2; s > 0; s >>= 1) {
+            if (tid < s)
+                sharedData[tid] += sharedData[tid + s];
+            __syncthreads();
+        }
+
+        if (tid == 0)
+            atomicAdd(&channel_mean[ci], sharedData[0] / (float)(N*L*H*W));
+    }
+
+}
+
+
+void channel_mean_forward(
+    const float* bilagrid,
+    float* channel_mean,
+    int N, int C, int L, int H, int W,
+    cudaStream_t stream
+) {
+    // TODO: optimize memory access pattern
+    dim3 block = { 4, 4, 4 };
+    dim3 bounds = {
+        (W +block.x-1)/block.x,
+        (H +block.y-1)/block.y,
+        // (N*C*L +block.z-1)/block.z
+        (N*L +block.z-1)/block.z
+    };
+    if (C == 12)
+        channel_mean_forward_kernel<12><<<bounds, block, 0, stream>>>(
+            bilagrid, channel_mean,
+            N, L, H, W
+        );
+    else if (C == 9)
+        channel_mean_forward_kernel<9><<<bounds, block, 0, stream>>>(
+            bilagrid, channel_mean,
             N, L, H, W
         );
     CHECK_DEVICE_ERROR;

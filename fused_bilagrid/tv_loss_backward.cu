@@ -1,6 +1,6 @@
 #include "config.h"
 
-template<int C>
+template<int C, bool inplace>
 __global__ void tv_loss_backward_kernel(
     const float* __restrict__ bilagrid,   // [N,C,L,H,W]
     const float v_tv_loss,                   // scalar gradient dL/d(tv_loss)
@@ -52,18 +52,22 @@ __global__ void tv_loss_backward_kernel(
             half_grad += (val - val0) * sz;
         }
 
-        v_bilagrid[cell_idx] = half_grad;
+        if (inplace)
+            v_bilagrid[cell_idx] += half_grad;
+        else
+            v_bilagrid[cell_idx] = half_grad;
     }
 }
 
 
 void tv_loss_backward(
-    const float* bilagrid,
+    const float* __restrict__ bilagrid,
     const float v_tv_loss,
-    float* v_bilagrid,
-    int N, int C, int L, int H, int W,
+    float* __restrict__ v_bilagrid,
+    int N, int C, int L, int H, int W, bool inplace,
     cudaStream_t stream
 ) {
+    // TODO: optimize memory access pattern
     dim3 block(4, 4, 4);
     dim3 grid(
         (W + block.x - 1) / block.x,
@@ -71,12 +75,71 @@ void tv_loss_backward(
         (N*L + block.z - 1) / block.z
     );
     if (C == 12)
-        tv_loss_backward_kernel<12><<<grid, block, 0, stream>>>(
+        (inplace ? tv_loss_backward_kernel<12, true> : tv_loss_backward_kernel<12, false>)
+        <<<grid, block, 0, stream>>>(
             bilagrid, v_tv_loss, v_bilagrid, N, L, H, W
         );
     else if (C == 9)
-        tv_loss_backward_kernel<9><<<grid, block, 0, stream>>>(
+        (inplace ? tv_loss_backward_kernel<9, true> : tv_loss_backward_kernel<9, false>)
+        <<<grid, block, 0, stream>>>(
             bilagrid, v_tv_loss, v_bilagrid, N, L, H, W
+        );
+    CHECK_DEVICE_ERROR;
+}
+
+
+
+template<int C, bool inplace>
+__global__ void channel_mean_backward_kernel(
+    const float* __restrict__ v_channel_mean,    // [C]
+    float* __restrict__ v_bilagrid,     // [N,C,L,H,W]
+    int N, int L, int H, int W
+) {
+    int wi = blockIdx.x * blockDim.x + threadIdx.x;
+    int hi = blockIdx.y * blockDim.y + threadIdx.y;
+    int idx = blockIdx.z * blockDim.z + threadIdx.z;
+    if (wi >= W || hi >= H || idx >= (N * L)) return;
+
+    int li = idx % L; idx /= L;
+    int ni = idx;
+
+    #pragma unroll
+    for (int ci = 0; ci < C; ci++) {
+
+        float grad = v_channel_mean[ci] / (N*L*H*W);
+
+        int cell_idx = (((ni * C + ci) * L + li) * H + hi) * W + wi;
+        if (inplace)
+            v_bilagrid[cell_idx] += grad;
+        else
+            v_bilagrid[cell_idx] = grad;
+    }
+}
+
+
+void channel_mean_backward(
+    const float* bilagrid,
+    const float* v_tv_loss,
+    float* v_bilagrid,
+    int N, int C, int L, int H, int W, bool inplace,
+    cudaStream_t stream
+) {
+    // TODO: optimize memory access pattern
+    dim3 block(4, 4, 4);
+    dim3 grid(
+        (W + block.x - 1) / block.x,
+        (H + block.y - 1) / block.y,
+        (N*L + block.z - 1) / block.z
+    );
+    if (C == 12)
+        (inplace ? channel_mean_backward_kernel<12, true> : channel_mean_backward_kernel<12, false>)
+        <<<grid, block, 0, stream>>>(
+            v_tv_loss, v_bilagrid, N, L, H, W
+        );
+    else if (C == 9)
+        (inplace ? channel_mean_backward_kernel<9, true> : channel_mean_backward_kernel<9, false>)
+        <<<grid, block, 0, stream>>>(
+            v_tv_loss, v_bilagrid, N, L, H, W
         );
     CHECK_DEVICE_ERROR;
 }
