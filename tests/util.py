@@ -4,14 +4,16 @@ from time import perf_counter
 import torch
 import numpy as np
 
-from typing import List, Tuple, Callable
+from typing import List, Tuple, Callable, Literal
 
 
-def assert_close(x, y, tol, name: str):
+def assert_close(x, y, tol, name: str, reduce: Literal["mean", "max"] = "max"):
     assert x.shape == y.shape, (x.shape, y.shape)
     abserr = torch.amax(torch.abs(y - x)).item()
-    # relerr = torch.abs(y - x).mean() / torch.fmax(torch.abs(x).mean(), torch.abs(y).mean())
-    relerr = abserr / torch.fmax(torch.abs(x).mean(), torch.abs(y).mean())
+    if reduce == "mean":
+        relerr = torch.abs(y - x).mean() / torch.fmax(torch.abs(x).mean(), torch.abs(y).mean())
+    elif reduce == "max":
+        relerr = abserr / torch.fmax(torch.abs(x).mean(), torch.abs(y).mean())
     print(f"{name}: abserr = {abserr:.2g}, relerr = {relerr:.2g}")
     assert relerr <= tol
 

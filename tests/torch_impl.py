@@ -57,6 +57,33 @@ from typing import Literal
 tl.set_backend("pytorch")
 
 
+def axis_angle_rotate_forward(w, v):
+    """
+    w: (B,3) axis-angle (theta*u)
+    v: (B,3) vector
+    returns: (B,3)
+    """
+    theta2 = (w*w).sum(dim=-1, keepdim=True)
+    theta = theta2.sqrt()
+
+    eps = 1e-6
+    small = theta < eps
+
+    # unit axis
+    u = w / (theta + 1e-20)
+
+    # expansions for small angle
+    c = torch.where(small, 1 - theta2*0.5, torch.cos(theta))
+    s = torch.where(small, theta - theta*theta2/6, torch.sin(theta))
+    t = 1 - c
+
+    # Rodrigues
+    uv = torch.cross(u, v, dim=-1)
+    uvd = (u * v).sum(dim=-1, keepdim=True)
+
+    return v*c + uv*s + u*(uvd*t)
+
+
 def color_correct(img: torch.Tensor, ref: torch.Tensor, num_iters: int = 5, eps: float = 0.5 / 255) -> torch.Tensor:
     """
     Warp `img` to match the colors in `ref_img` using iterative color matching.
@@ -224,6 +251,8 @@ def slice(bil_grids, xy, rgb, grid_idx):
         rgb = torch.matmul(affine_mats[..., :3], rgb.unsqueeze(-1)).squeeze(-1)
     elif bil_grids.bilagrid_type == "depth":
         rgb = torch.exp(affine_mats[..., 0] * torch.log(rgb) + affine_mats[..., 1])
+    elif bil_grids.bilagrid_type == "normal":
+        rgb = axis_angle_rotate_forward(affine_mats[..., 0, :], F.normalize(rgb, dim=-1))
 
     return {
         "rgb": rgb.reshape(*sh_),
@@ -238,7 +267,7 @@ class BilateralGrid(nn.Module):
     """
 
     def __init__(self, num, grid_X=16, grid_Y=16, grid_W=8, 
-            bilagrid_type: Literal["affine", "ppisp", "loglinear", "depth"] = "affine"
+            bilagrid_type: Literal["affine", "ppisp", "loglinear", "depth", "normal"] = "affine"
         ):
         """
         Args:
@@ -269,6 +298,9 @@ class BilateralGrid(nn.Module):
             self.rgb2gray = lambda rgb: (rgb @ self.rgb2gray_weight.T) * 2.0 - 1.0
         elif self.bilagrid_type == "depth":
             self.rgb2gray = lambda depth: (depth / (1.0 + depth)) * 2.0 - 1.0
+        elif self.bilagrid_type == "normal":
+            # self.rgb2gray = lambda normal: torch.acos(F.normalize(normal, dim=-1)[..., 2:]) / torch.pi * 2.0 - 1.0
+            self.rgb2gray = lambda normal: F.normalize(normal, dim=-1)[..., 2:]
         """ A function that converts RGB to gray-scale guidance in $[-1, 1]$."""
 
     def _init_identity_grid(self):
@@ -291,6 +323,10 @@ class BilateralGrid(nn.Module):
         elif self.bilagrid_type == "depth":
             grid = torch.tensor([
                 0.0, 0
+            ]).float()
+        elif self.bilagrid_type == "normal":
+            grid = torch.tensor([
+                0.0, 0.0, 0.0
             ]).float()
         grid = grid.repeat([self.grid_guidance * self.grid_height * self.grid_width, 1])  # (L * H * W, 12)
         grid = grid.reshape(1, self.grid_guidance, self.grid_height, self.grid_width, -1)  # (1, L, H, W, 12)
@@ -338,7 +374,7 @@ class BilateralGrid(nn.Module):
         # Generate slicing coordinates.
         grid_xy = (grid_xy - 0.5) * 2  # Rescale to [-1, 1].
         grid_z = self.rgb2gray(rgb)
-        # if self.bilagrid_type == "ppisp":
+        # if self.bilagrid_type == "normal":
         #     grid_z = grid_z.detach()
 
         # print(grid_xy.shape, grid_z.shape)
@@ -374,6 +410,8 @@ class BilateralGrid(nn.Module):
                 affine_mats[1],
             ], dim=-1)
             affine_mats = affine_mats.reshape(*affine_mats.shape[:-1], 1, 2)  # (N, m, h, w, 1, 2)
+        elif self.bilagrid_type == "normal":
+            affine_mats = affine_mats.reshape(*affine_mats.shape[:-1], 1, 3)  # (N, m, h, w, 1, 3)
 
 
         for _ in range(5 - input_ndims):

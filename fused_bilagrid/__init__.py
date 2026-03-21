@@ -155,6 +155,25 @@ class _FusedUniformGridDepthSample(torch.autograd.Function):
             ), None, None
 
 
+class _FusedUniformGridNormalSample(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, bilagrid, normal, _args):
+        with torch.cuda.device(bilagrid.device):
+            output = _C.bilagrid_normal_uniform_sample_forward(bilagrid, normal)
+        ctx.save_for_backward(bilagrid, normal)
+        ctx._args = _args
+        return output
+
+    @staticmethod
+    def backward(ctx, v_output):
+        bilagrid, normal = ctx.saved_tensors
+        with torch.cuda.device(bilagrid.device):
+            return *_C.bilagrid_normal_uniform_sample_backward(
+                bilagrid, normal, v_output.contiguous(),
+                *ctx._args
+            ), None
+
+
 class _FusedPatchedGridSample(torch.autograd.Function):
     @staticmethod
     def forward(ctx, bilagrid, rgb, h0, w0, offsets):
@@ -227,10 +246,28 @@ class _FusedPatchedGridDepthSample(torch.autograd.Function):
             ), None, None, None, None
 
 
+class _FusedPatchedGridNormalSample(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, bilagrid, normal, h0, w0, offsets):
+        with torch.cuda.device(bilagrid.device):
+            output = _C.bilagrid_normal_patched_sample_forward(bilagrid, normal, h0, w0, offsets)
+        ctx.save_for_backward(bilagrid, normal, offsets)
+        ctx.h0, ctx.w0 = h0, w0
+        return output
+
+    @staticmethod
+    def backward(ctx, v_output):
+        bilagrid, normal, offsets = ctx.saved_tensors
+        with torch.cuda.device(bilagrid.device):
+            return *_C.bilagrid_normal_patched_sample_backward(
+                bilagrid, normal, ctx.h0, ctx.w0, offsets, v_output.contiguous(),
+            ), None, None, None
+
+
 class _FusedTotalVariationLoss(torch.autograd.Function):
     @staticmethod
     def forward(ctx, bilagrid):
-        assert bilagrid.ndim == 5 and bilagrid.shape[1] in [2, 9, 12], bilagrid.shape
+        assert bilagrid.ndim == 5 and bilagrid.shape[1] in [2, 3, 9, 12], bilagrid.shape
         # assert bilagrid.shape[-3] >= 2 and bilagrid.shape[-2] >= 2 and bilagrid.shape[-1] >= 2, bilagrid.shape
 
         ctx.save_for_backward(bilagrid)
@@ -411,6 +448,48 @@ def fused_bilagrid_depth_sample(
             bilagrid.float().contiguous(),
             depth,
             _C.compute_depth_scalars(depth, False),
+            args
+        )
+
+
+def fused_bilagrid_normal_sample(
+        bilagrid, coords, normal, compute_coords_grad=False,
+        actual_height=None, actual_width=None, patch_offsets=None,
+        image_indices=None
+    ):
+    if actual_height is not None and actual_width is not None and patch_offsets is not None:
+        if image_indices is not None:
+            raise UserWarning("Arguments for both patched sample and packed sample are provided. Using patched sample.")
+        return _FusedPatchedGridNormalSample.apply(
+            bilagrid.float().contiguous(),
+            normal.float().contiguous(),
+            actual_height, actual_width,
+            patch_offsets.contiguous()
+        )
+    if image_indices is not None:
+        raise NotImplementedError()
+        return _FusedPackedGridNormalSample.apply(
+            bilagrid.float().contiguous(),
+            image_indices.contiguous(),
+            coords.float().contiguous(),
+            rgb.float().contiguous(),
+            compute_coords_grad
+        )
+    if coords is not None:
+        raise NotImplementedError()
+        return _FusedGridNormalSample.apply(
+            bilagrid.float().contiguous(),
+            coords.float().contiguous(),
+            rgb.float().contiguous(),
+            compute_coords_grad
+        )
+    else:
+        # TODO: re-calibrate
+        args = choose_uniform_sample_backward_args(*map(int, normal.shape[-3:-1]), *map(int, bilagrid.shape[-3:]))
+        # args = (1, 8, 8, 5)
+        return _FusedUniformGridNormalSample.apply(
+            bilagrid.float().contiguous(),
+            normal.float().contiguous(),
             args
         )
 
@@ -718,11 +797,35 @@ class BilateralGridDepth(BilateralGrid):
 
         # Initialize grids.
         grid = self._init_identity_grid()
-        self.grids = nn.Parameter(grid.tile(num, 1, 1, 1, 1))  # (N, 9, L, H, W)
+        self.grids = nn.Parameter(grid.tile(num, 1, 1, 1, 1))  # (N, 2, L, H, W)
         """ A 5-D tensor of shape $(N, 9, L, H, W)$."""
 
         self.fused_bilagrid_sample = fused_bilagrid_depth_sample
 
     def _init_identity_grid(self):
         grid = torch.zeros(1, 2, self.grid_guidance, self.grid_height, self.grid_width)
+        return grid
+
+
+class BilateralGridNormal(BilateralGrid):
+
+    def __init__(self, num, grid_X=16, grid_Y=16, grid_W=8):
+        """
+        Args:
+            num (int): The number of bilateral grids (i.e., the number of views).
+            grid_X (int): Defines grid width $W$.
+            grid_Y (int): Defines grid height $H$.
+            grid_W (int): Defines grid guidance dimension $L$.
+        """
+        super(BilateralGridNormal, self).__init__(num, grid_X, grid_Y, grid_W)
+
+        # Initialize grids.
+        grid = self._init_identity_grid()
+        self.grids = nn.Parameter(grid.tile(num, 1, 1, 1, 1))  # (N, 3, L, H, W)
+        """ A 5-D tensor of shape $(N, 9, L, H, W)$."""
+
+        self.fused_bilagrid_sample = fused_bilagrid_normal_sample
+
+    def _init_identity_grid(self):
+        grid = torch.zeros(1, 3, self.grid_guidance, self.grid_height, self.grid_width)
         return grid

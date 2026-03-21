@@ -318,6 +318,72 @@ def test_bilagrid_depth_uniform():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def test_bilagrid_normal_uniform():
+
+    print("# Test uniform bilagrid (normal)")
+
+    N = 3
+    W, H, L = 15, 16, 7
+    # W, H, L = 4, 4, 2
+    h, w = 345, 678
+    # h, w = 2, 2
+    # h, w = 3, 5
+    idx = torch.tensor([0]).cuda()
+
+    bilagrid0 = torch_impl.BilateralGrid(N, W, H, L, bilagrid_type="normal").cuda()
+    bilagrid1 = fused_bilagrid.BilateralGridNormal(N, W, H, L).cuda()
+
+    torch.random.manual_seed(42)
+    grid_data = torch.randn_like(bilagrid0.grids.data)
+    bilagrid0.grids.data = grid_data
+    bilagrid1.grids.data = grid_data
+    assert_close(bilagrid1.grids, bilagrid0.grids, 0.0, "bilagrid")
+
+    ni = len(idx) if idx is not None else N
+
+    grid_y, grid_x = torch.meshgrid(
+        torch.linspace(0, 1.0, h).cuda(),
+        torch.linspace(0, 1.0, w).cuda(),
+        indexing="ij",
+    )
+    uv = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0).repeat(ni, 1, 1, 1)
+
+    rgb = torch.randn((ni, h, w, 3)).cuda()
+    rgb = torch.exp(0.01*torch.randn_like(rgb)) * torch.nn.functional.normalize(rgb, dim=-1)
+    rgb0 = torch.nn.Parameter(rgb.clone())
+    rgb1 = torch.nn.Parameter(rgb.clone())
+
+    output0 = torch_impl.slice(bilagrid0, uv, rgb0, idx)['rgb']
+    output1 = fused_bilagrid.fused_bilagrid_normal_sample(
+        bilagrid1.grids[idx], None, rgb1.unsqueeze(1)
+    ).squeeze(1)
+
+    # import matplotlib.pyplot as plt
+    # fig, (ax1, ax2) = plt.subplots(1, 2)
+    # ax1.imshow(0.5+0.5*output0[0].detach().cpu().numpy())
+    # # ax1.imshow(rgb1[0].detach().cpu().numpy())
+    # ax2.imshow(0.5+0.5*output1[0].detach().cpu().numpy())
+    # plt.show()
+
+    assert_close(output1, output0, 1e-3, "output")
+
+    weights = torch.randn_like(output0)
+    loss = (weights*output1).mean()
+
+    weights = torch.randn_like(output0)
+    (weights*output0).mean().backward()
+    (weights*output1).mean().backward()
+
+    # print(bilagrid1.grids.grad)
+    # print(bilagrid0.grids.grad)
+
+    assert_close(bilagrid1.grids.grad, bilagrid0.grids.grad, 1e-3, "bilagrid.grad")
+    # assert_close(rgb1.grad, rgb0.grad, 1e-5, "rgb.grad", reduce="mean")
+    assert_close(rgb1.grad, rgb0.grad, 1e-3, "rgb.grad")
+    print()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_tv_loss():
 
     print("# Test total variation loss")
@@ -356,5 +422,6 @@ if __name__ == "__main__":
     test_bilagrid_loglinear_uniform()
     test_compute_depth_scalars()
     test_bilagrid_depth_uniform()
+    test_bilagrid_normal_uniform()
     test_tv_loss()
 
