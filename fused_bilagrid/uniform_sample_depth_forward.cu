@@ -8,6 +8,7 @@ __global__ void bilagrid_depth_uniform_sample_forward_kernel(
 #endif
     const float* __restrict__ bilagrid, // [N,2,L,H,W]
     const float* __restrict__ depth,  // [N,m,h,w,1]
+    const float* __restrict__ scalars,  // [N]
     float* __restrict__ output,  // [N,m,h,w,1]
     int N, int L, int H, int W,
     int m, int h, int w
@@ -32,6 +33,13 @@ __global__ void bilagrid_depth_uniform_sample_forward_kernel(
     // input and output depths
     float sr = depth[g_offset];
     float dr = 0.0f;
+
+#ifndef PATCHED
+    const float scalar = scalars[ni];
+#else
+    const float scalar = scalars[0];
+#endif
+    sr *= scalar;
 
     // grid coords
 #ifdef PATCHED

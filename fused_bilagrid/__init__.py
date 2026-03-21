@@ -138,21 +138,21 @@ class _FusedUniformGridLoglinearSample(torch.autograd.Function):
 
 class _FusedUniformGridDepthSample(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, bilagrid, depth, _args):
+    def forward(ctx, bilagrid, depth, scalars, _args):
         with torch.cuda.device(bilagrid.device):
-            output = _C.bilagrid_depth_uniform_sample_forward(bilagrid, depth)
-        ctx.save_for_backward(bilagrid, depth)
+            output = _C.bilagrid_depth_uniform_sample_forward(bilagrid, depth, scalars)
+        ctx.save_for_backward(bilagrid, depth, scalars)
         ctx._args = _args
         return output
 
     @staticmethod
     def backward(ctx, v_output):
-        bilagrid, depth = ctx.saved_tensors
+        bilagrid, depth, scalars = ctx.saved_tensors
         with torch.cuda.device(bilagrid.device):
             return *_C.bilagrid_depth_uniform_sample_backward(
-                bilagrid, depth, v_output.contiguous(),
+                bilagrid, depth, scalars, v_output.contiguous(),
                 *ctx._args
-            ), None
+            ), None, None
 
 
 class _FusedPatchedGridSample(torch.autograd.Function):
@@ -211,20 +211,20 @@ class _FusedPatchedGridLoglinearSample(torch.autograd.Function):
 
 class _FusedPatchedGridDepthSample(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, bilagrid, rgb, h0, w0, offsets):
+    def forward(ctx, bilagrid, depth, scalars, h0, w0, offsets):
         with torch.cuda.device(bilagrid.device):
-            output = _C.bilagrid_depth_patched_sample_forward(bilagrid, rgb, h0, w0, offsets)
-        ctx.save_for_backward(bilagrid, rgb, offsets)
+            output = _C.bilagrid_depth_patched_sample_forward(bilagrid, depth, scalars, h0, w0, offsets)
+        ctx.save_for_backward(bilagrid, depth, scalars, offsets)
         ctx.h0, ctx.w0 = h0, w0
         return output
 
     @staticmethod
     def backward(ctx, v_output):
-        bilagrid, rgb, offsets = ctx.saved_tensors
+        bilagrid, depth, scalars, offsets = ctx.saved_tensors
         with torch.cuda.device(bilagrid.device):
             return *_C.bilagrid_depth_patched_sample_backward(
-                bilagrid, rgb, ctx.h0, ctx.w0, offsets, v_output.contiguous(),
-            ), None, None, None
+                bilagrid, depth, scalars, ctx.h0, ctx.w0, offsets, v_output.contiguous(),
+            ), None, None, None, None
 
 
 class _FusedTotalVariationLoss(torch.autograd.Function):
@@ -375,12 +375,14 @@ def fused_bilagrid_depth_sample(
         actual_height=None, actual_width=None, patch_offsets=None,
         image_indices=None
     ):
+    depth = depth.float().contiguous()
     if actual_height is not None and actual_width is not None and patch_offsets is not None:
         if image_indices is not None:
             raise UserWarning("Arguments for both patched sample and packed sample are provided. Using patched sample.")
         return _FusedPatchedGridDepthSample.apply(
             bilagrid.float().contiguous(),
-            depth.float().contiguous(),
+            depth,
+            _C.compute_depth_scalars(depth, True),
             actual_height, actual_width,
             patch_offsets.contiguous()
         )
@@ -407,7 +409,8 @@ def fused_bilagrid_depth_sample(
         # args = (1, 8, 8, 5)
         return _FusedUniformGridDepthSample.apply(
             bilagrid.float().contiguous(),
-            depth.float().contiguous(),
+            depth,
+            _C.compute_depth_scalars(depth, False),
             args
         )
 

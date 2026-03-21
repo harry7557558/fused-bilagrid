@@ -11,6 +11,7 @@
 void bilagrid_depth_uniform_sample_forward(
     const float* bilagrid,
     const float* depth,
+    const float* scalars,
     float* output,
     int N, int L, int H, int W,
     int m, int h, int w,
@@ -20,7 +21,7 @@ void bilagrid_depth_uniform_sample_forward(
     int threads = 256;
     int blocks = (total + threads - 1) / threads;
     bilagrid_depth_uniform_sample_forward_kernel<<<blocks, threads, 0, stream>>>(
-        bilagrid, depth, output,
+        bilagrid, depth, scalars, output,
         N, L, H, W, m, h, w
     );
     CHECK_DEVICE_ERROR;
@@ -31,6 +32,7 @@ void bilagrid_depth_uniform_sample_forward(
 void bilagrid_depth_patched_sample_forward(
     const float* bilagrid,
     const float* depth,
+    const float* scalars,
     const int* offsets,
     float* output,
     int N, int L, int H, int W,
@@ -41,7 +43,7 @@ void bilagrid_depth_patched_sample_forward(
     int threads = 256;
     int blocks = (total + threads - 1) / threads;
     bilagrid_depth_patched_sample_forward_kernel<<<blocks, threads, 0, stream>>>(
-        bilagrid, depth, output,
+        bilagrid, depth, scalars, output,
         N, L, H, W, m, h, w, h0, w0, offsets
     );
     CHECK_DEVICE_ERROR;
@@ -52,6 +54,7 @@ void bilagrid_depth_patched_sample_forward(
 void bilagrid_depth_uniform_sample_backward_v1(
     const float* bilagrid,
     const float* depth,
+    const float* scalars,
     const float* v_output,
     float* v_bilagrid,
     float* v_depth,
@@ -81,7 +84,7 @@ void bilagrid_depth_uniform_sample_backward_v1(
             (N*L +block.z-1)/block.z
         };
         bilagrid_depth_uniform_sample_backward_v1_kernel_bilagrid<<<bounds, block, 0, stream>>>(
-            bilagrid, depth, v_output, v_bilagrid,
+            bilagrid, depth, scalars, v_output, v_bilagrid,
             N, L, H, W, m, h, w, mult_x, mult_y
         );
         CHECK_DEVICE_ERROR;
@@ -93,7 +96,7 @@ void bilagrid_depth_uniform_sample_backward_v1(
         int threads = 256;
         int blocks = (total + threads - 1) / threads;
         bilagrid_depth_uniform_sample_backward_v1_kernel_depth<<<blocks, threads, 0, stream>>>(
-            bilagrid, depth, v_output,
+            bilagrid, depth, scalars, v_output,
             v_depth,
             N, L, H, W, m, h, w
         );
@@ -105,6 +108,7 @@ void bilagrid_depth_uniform_sample_backward_v1(
 void bilagrid_depth_patched_sample_backward_v1(
     const float* bilagrid,
     const float* depth,
+    const float* scalars,
     const int* offsets,
     const float* v_output,
     float* v_bilagrid,
@@ -143,7 +147,7 @@ void bilagrid_depth_patched_sample_backward_v1(
         };
         // printf("bounds: %u %u %u\n", bounds.x, bounds.y, bounds.z);
         bilagrid_depth_patched_sample_backward_v1_kernel_bilagrid<<<bounds, block, 0, stream>>>(
-            bilagrid, depth, v_output, v_bilagrid,
+            bilagrid, depth, scalars, v_output, v_bilagrid,
             N, L, H, W, m, h, w, h0, w0, offsets, mult_x, mult_y, num_m_batches
         );
         CHECK_DEVICE_ERROR;
@@ -155,7 +159,7 @@ void bilagrid_depth_patched_sample_backward_v1(
         int threads = 256;
         int blocks = (total + threads - 1) / threads;
         bilagrid_depth_patched_sample_backward_v1_kernel_depth<<<blocks, threads, 0, stream>>>(
-            bilagrid, depth, v_output, v_depth,
+            bilagrid, depth, scalars, v_output, v_depth,
             N, L, H, W, m, h, w, h0, w0, offsets
         );
         CHECK_DEVICE_ERROR;

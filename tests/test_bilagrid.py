@@ -225,6 +225,27 @@ def test_bilagrid_loglinear_uniform():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
+def test_compute_depth_scalars():
+
+    print("# Test compute depth scalars")
+
+    N = 10
+    h, w = 345, 678
+
+    depth = torch.exp(0.5 * torch.randn((N, h, w, 1)).cuda()) - 0.1
+    depth = torch.clip(depth, 0.0, 1.2345)
+
+    scalars = fused_bilagrid._C.compute_depth_scalars(depth, False)
+
+    ref = 1.0 / torch.stack([torch.median(d[(d > 0.0) & (d < d.amax())]) for d in depth])
+
+    assert_close(scalars, ref, 1e-6, "depth_scalars")
+
+    timeit(lambda: fused_bilagrid._C.compute_depth_scalars(depth, False), "depth_scalars")
+    print()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="No CUDA device")
 def test_bilagrid_depth_uniform():
 
     print("# Test uniform bilagrid (depth)")
@@ -257,10 +278,15 @@ def test_bilagrid_depth_uniform():
     uv = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0).repeat(ni, 1, 1, 1)
 
     rgb = torch.exp(0.1*torch.randn((ni, h, w, 1))).cuda()
+    rgb *= 100.0
     rgb0 = torch.nn.Parameter(rgb.clone())
     rgb1 = torch.nn.Parameter(rgb.clone())
 
-    output0 = torch_impl.slice(bilagrid0, uv, rgb0, idx)['rgb']
+    output0 = torch_impl.slice(
+        bilagrid0, uv,
+        rgb0 / torch.stack([torch.median(d[(d > 0.0) & (d < d.amax())]) for d in rgb0]).detach(),
+        idx
+    )['rgb']
     output1 = fused_bilagrid.fused_bilagrid_depth_sample(
         bilagrid1.grids[idx], None, rgb1.unsqueeze(1)
     ).squeeze(1)
@@ -328,6 +354,7 @@ if __name__ == "__main__":
     test_bilagrid_uniform()
     test_bilagrid_ppisp_uniform()
     test_bilagrid_loglinear_uniform()
+    test_compute_depth_scalars()
     test_bilagrid_depth_uniform()
     test_tv_loss()
 

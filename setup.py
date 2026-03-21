@@ -70,6 +70,7 @@ setup(
         CUDAExtension(
             name="fused_bilagrid_cuda",
             sources=[
+                "fused_bilagrid/quantile.cu",
                 "fused_bilagrid/sample_forward.cu",
                 "fused_bilagrid/sample_backward.cu",
                 "fused_bilagrid/sample_ppisp_forward.cu",

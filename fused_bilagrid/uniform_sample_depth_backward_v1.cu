@@ -12,6 +12,7 @@ __global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_bilagrid(
 #endif
     const float* __restrict__ bilagrid,  // [N,2,L,H,W]
     const float* __restrict__ depth,  // [N,m,h,w,1]
+    const float* __restrict__ scalars,  // [N]
     const float* __restrict__ v_output,  // [N,m,h,w,1]
     float* __restrict__ v_bilagrid,  // [N,2,L,H,W]
     int N, int L, int H, int W,
@@ -79,6 +80,12 @@ __global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_bilagrid(
     int hi1 = min(block_hi0+(yf+1)*y_step, block_hi1);
 #endif
 
+#ifndef PATCHED
+    const float scalar = scalars[ni];
+#else
+    const float scalar = scalars[0];
+#endif
+
     // Result for each affine mat channel
     float accum[2] = {0, 0};
 
@@ -121,7 +128,7 @@ __global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_bilagrid(
         #else
             int g_off = (((ni*m + mi)*h + hi)*w + wi);
         #endif
-            float sr = depth[g_off];
+            float sr = depth[g_off] * scalar;
 
         #ifdef PATCHED
             float x = (float)wi / (float)(w0-1) * (float)(W-1);
@@ -266,6 +273,7 @@ __global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_depth(
 #endif
     const float* __restrict__ bilagrid,  // [N,2,L,H,W]
     const float* __restrict__ depth,  // [N,m,h,w,1]
+    const float* __restrict__ scalars,  // [N]
     const float* __restrict__ v_output,  // [N,m,h,w,1]
     float* __restrict__ v_depth,  // [N,m,h,w,1]
     int N, int L, int H, int W,
@@ -285,9 +293,15 @@ __global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_depth(
     int mi = tmp % m; tmp /= m;
     int ni = tmp;
 
+#ifndef PATCHED
+    const float scalar = scalars[ni];
+#else
+    const float scalar = scalars[0];
+#endif
+
     // input and output colors
     int g_off = (((ni * m + mi) * h + hi) * w + wi);
-    float sr = depth[g_off];
+    float sr = depth[g_off] * scalar;
     float dr = v_output[g_off];
     float vr = 0.0;
 
@@ -368,6 +382,7 @@ __global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_depth(
         gz_grad += dwdz[corner] * (L-1) * trilerp;
     }
     vr += gz_grad / ((sr+1.0f) * (sr+1.0f));
+    vr *= scalar;
     v_depth[g_off] = isfinite(vr) ? vr : 0.0f;
 }
 

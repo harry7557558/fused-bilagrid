@@ -1,6 +1,8 @@
 #include <torch/extension.h>
 #include <c10/cuda/CUDAGuard.h>
 
+#include "quantile.cuh"
+
 
 void bilagrid_sample_forward(
     const float* bilagrid,
@@ -246,6 +248,7 @@ void bilagrid_loglinear_patched_sample_backward_v1(
 void bilagrid_depth_uniform_sample_forward(
     const float* bilagrid,
     const float* depth,
+    const float* scalars,
     float* output,
     int N, int L, int H, int W,
     int m, int h, int w,
@@ -255,6 +258,7 @@ void bilagrid_depth_uniform_sample_forward(
 void bilagrid_depth_patched_sample_forward(
     const float* bilagrid,
     const float* depth,
+    const float* scalars,
     const int* offsets,
     float* output,
     int N, int L, int H, int W,
@@ -265,6 +269,7 @@ void bilagrid_depth_patched_sample_forward(
 void bilagrid_depth_uniform_sample_backward_v1(
     const float* bilagrid,
     const float* depth,
+    const float* scalars,
     const float* v_output,
     float* v_bilagrid,
     float* v_depth,
@@ -278,6 +283,7 @@ void bilagrid_depth_uniform_sample_backward_v1(
 void bilagrid_depth_patched_sample_backward_v1(
     const float* bilagrid,
     const float* depth,
+    const float* scalars,
     const int* offsets,
     const float* v_output,
     float* v_bilagrid,
@@ -759,9 +765,33 @@ bilagrid_loglinear_uniform_sample_backward_tensor(
 }
 
 
+torch::Tensor compute_depth_scalars_tensor(
+    torch::Tensor depth,  // [N,m,h,w,1]
+    bool patched
+) {
+    int B = patched ? 1 : depth.size(0);  // TODO
+    int N = depth.numel() / B;
+
+    auto output = torch::empty({B,}, depth.options());
+
+    auto temp = torch::empty({(256+5)*B,}, depth.options().dtype(torch::kInt32));
+
+    batch_quantile_masked_radix_select<true>(
+        depth.data_ptr<float>(),
+        B, N, 0.5f,
+        output.data_ptr<float>(),
+        (uint32_t*)temp.data_ptr<int32_t>(),
+        at::cuda::getCurrentCUDAStream()
+    );
+    
+    return output;
+}
+
+
 torch::Tensor bilagrid_depth_uniform_sample_forward_tensor(
     torch::Tensor bilagrid, // [N,2,L,H,W]
-    torch::Tensor depth  // [N,m,h,w,1]
+    torch::Tensor depth,  // [N,m,h,w,1]
+    torch::Tensor scalars  // [N]
 ) {
     int N = bilagrid.size(0), L = bilagrid.size(2),
         H = bilagrid.size(3), W = bilagrid.size(4);
@@ -772,6 +802,7 @@ torch::Tensor bilagrid_depth_uniform_sample_forward_tensor(
     bilagrid_depth_uniform_sample_forward(
         bilagrid.data_ptr<float>(),
         depth.data_ptr<float>(),
+        scalars.data_ptr<float>(),
         output.data_ptr<float>(),
         N, L, H, W, m, h, w,
         at::cuda::getCurrentCUDAStream()
@@ -785,6 +816,7 @@ std::tuple<torch::Tensor, torch::Tensor>
 bilagrid_depth_uniform_sample_backward_tensor(
     torch::Tensor bilagrid,  // [N,2,L,H,W]
     torch::Tensor depth,  // [N,m,h,w,1]
+    torch::Tensor scalars,  // [N]
     torch::Tensor v_output,  // [N,m,h,w,1]
     const int version,
     const int block_x, const int block_y,
@@ -803,6 +835,7 @@ bilagrid_depth_uniform_sample_backward_tensor(
         bilagrid_depth_uniform_sample_backward_v1(
             bilagrid.data_ptr<float>(),
             depth.data_ptr<float>(),
+            scalars.data_ptr<float>(),
             v_output.data_ptr<float>(),
             v_bilagrid.data_ptr<float>(),
             v_depth.data_ptr<float>(),
@@ -1007,6 +1040,7 @@ bilagrid_loglinear_patched_sample_backward_tensor(
 torch::Tensor bilagrid_depth_patched_sample_forward_tensor(
     torch::Tensor bilagrid, // [N,2,L,H,W]
     torch::Tensor depth,  // [N,m,h,w,1]
+    torch::Tensor scalars,  // [N]
     int h0, int w0,
     torch::Tensor offsets  // [N,m,2]
 ) {
@@ -1019,6 +1053,7 @@ torch::Tensor bilagrid_depth_patched_sample_forward_tensor(
     bilagrid_depth_patched_sample_forward(
         bilagrid.data_ptr<float>(),
         depth.data_ptr<float>(),
+        scalars.data_ptr<float>(),
         offsets.data_ptr<int>(),
         output.data_ptr<float>(),
         N, L, H, W, m, h, w, h0, w0,
@@ -1033,6 +1068,7 @@ std::tuple<torch::Tensor, torch::Tensor>
 bilagrid_depth_patched_sample_backward_tensor(
     torch::Tensor bilagrid,  // [N,2,L,H,W]
     torch::Tensor depth,  // [N,m,h,w,1]
+    torch::Tensor scalars,  // [N]
     int h0, int w0,
     torch::Tensor offsets,  // [N,m,2]
     torch::Tensor v_output  // [N,m,h,w,1]
@@ -1049,6 +1085,7 @@ bilagrid_depth_patched_sample_backward_tensor(
     bilagrid_depth_patched_sample_backward_v1(  // TODO: v1 is extremely slow for patched sample
         bilagrid.data_ptr<float>(),
         depth.data_ptr<float>(),
+        scalars.data_ptr<float>(),
         offsets.data_ptr<int>(),
         v_output.data_ptr<float>(),
         v_bilagrid.data_ptr<float>(),
