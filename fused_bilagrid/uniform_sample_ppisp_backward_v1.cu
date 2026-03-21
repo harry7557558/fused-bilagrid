@@ -388,6 +388,43 @@ __global__ void bilagrid_ppisp_uniform_sample_backward_v1_kernel_rgb(
     apply_color_correction_ppisp_bwd(rgb_after_exp, &color_params, grad_rgb, grad_rgb, &grad_color_params);
     apply_exposure_bwd(rgb, exposure_param, grad_rgb, grad_rgb, grad_exposure_param);
 
+    // spatial derivatives for coords
+    float dwdz[8] = {
+        -(1-fx)*(1-fy), -fx*(1-fy),
+        -(1-fx)*fy,     -fx*fy,
+         (1-fx)*(1-fy),  fx*(1-fy),
+         (1-fx)*fy,      fx*fy
+    };
+
+    // accumulate gradient into coords (chain through bilagrid values and rgb)
+    float gz_grad = 0.f;
+    #pragma unroll
+    for (int corner = 0; corner < 8; ++corner) {
+        int xi = (corner & 1) ? x1 : x0;
+        int yi = (corner & 2) ? y1 : y0;
+        int zi = (corner & 4) ? z1 : z0;
+        float trilerp = 0.f;
+        // gather the corresponding bilagrid value for each of the 9 channels
+        #pragma unroll
+        for (int ci = 0; ci < 9; ++ci) {
+            const float* vol = bilagrid + ((ni*9 + ci)*L*H*W);
+            float v = vol[(zi*H + yi)*W + xi];
+            trilerp += v * (ci == 0 ? grad_exposure_param :
+                ci == 1 ? grad_color_params.b.x :
+                ci == 2 ? grad_color_params.b.y :
+                ci == 3 ? grad_color_params.r.x :
+                ci == 4 ? grad_color_params.r.y :
+                ci == 5 ? grad_color_params.g.x :
+                ci == 6 ? grad_color_params.g.y :
+                ci == 7 ? grad_color_params.n.x :
+                grad_color_params.n.y);
+        }
+        gz_grad += dwdz[corner] * (L-1) * trilerp;
+    }
+    grad_rgb.x += kC2G_r * gz_grad;
+    grad_rgb.y += kC2G_g * gz_grad;
+    grad_rgb.z += kC2G_b * gz_grad;
+
     v_rgb_in[g_off+0] = isfinite(grad_rgb.x) ? grad_rgb.x : 0.0f;
     v_rgb_in[g_off+1] = isfinite(grad_rgb.y) ? grad_rgb.y : 0.0f;
     v_rgb_in[g_off+2] = isfinite(grad_rgb.z) ? grad_rgb.z : 0.0f;

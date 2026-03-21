@@ -50,6 +50,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from torch_impl_ppisp import ppisp_apply_torch
+
 from typing import Literal
 
 tl.set_backend("pytorch")
@@ -214,6 +216,10 @@ def slice(bil_grids, xy, rgb, grid_idx):
     affine_mats = bil_grids(xy, rgb, grid_idx)
     if bil_grids.bilagrid_type == "affine":
         rgb = torch.matmul(affine_mats[..., :3], rgb.unsqueeze(-1)).squeeze(-1) + affine_mats[..., 3]
+    elif bil_grids.bilagrid_type == "ppisp":
+        exposure_params = affine_mats[..., 0, :1]
+        color_params = affine_mats[..., 0, 1:]
+        rgb = ppisp_apply_torch(exposure_params, None, color_params, None, rgb)
     elif bil_grids.bilagrid_type == "loglinear":
         rgb = torch.matmul(affine_mats[..., :3], rgb.unsqueeze(-1)).squeeze(-1)
     elif bil_grids.bilagrid_type == "depth":
@@ -232,7 +238,7 @@ class BilateralGrid(nn.Module):
     """
 
     def __init__(self, num, grid_X=16, grid_Y=16, grid_W=8, 
-            bilagrid_type: Literal["affine", "loglinear", "depth"] = "affine"
+            bilagrid_type: Literal["affine", "ppisp", "loglinear", "depth"] = "affine"
         ):
         """
         Args:
@@ -259,7 +265,7 @@ class BilateralGrid(nn.Module):
 
         # Weights of BT601 RGB-to-gray.
         self.register_buffer("rgb2gray_weight", torch.Tensor([[0.299, 0.587, 0.114]]))
-        if self.bilagrid_type in ["affine", "loglinear"]:
+        if self.bilagrid_type in ["affine", "ppisp", "loglinear"]:
             self.rgb2gray = lambda rgb: (rgb @ self.rgb2gray_weight.T) * 2.0 - 1.0
         elif self.bilagrid_type == "depth":
             self.rgb2gray = lambda depth: (depth / (1.0 + depth)) * 2.0 - 1.0
@@ -271,6 +277,10 @@ class BilateralGrid(nn.Module):
                 1.0, 0, 0, 0,
                 0, 1.0, 0, 0,
                 0, 0, 1.0, 0,
+            ]).float()
+        elif self.bilagrid_type == "ppisp":
+            grid = torch.tensor([
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
             ]).float()
         elif self.bilagrid_type == "loglinear":
             grid = torch.tensor([
@@ -328,7 +338,7 @@ class BilateralGrid(nn.Module):
         # Generate slicing coordinates.
         grid_xy = (grid_xy - 0.5) * 2  # Rescale to [-1, 1].
         grid_z = self.rgb2gray(rgb)
-        # if self.bilagrid_type == "depth":
+        # if self.bilagrid_type == "ppisp":
         #     grid_z = grid_z.detach()
 
         # print(grid_xy.shape, grid_z.shape)
@@ -341,6 +351,8 @@ class BilateralGrid(nn.Module):
         affine_mats = affine_mats.permute(0, 2, 3, 4, 1)  # (N, m, h, w, 12)
         if self.bilagrid_type == "affine":
             affine_mats = affine_mats.reshape(*affine_mats.shape[:-1], 3, 4)  # (N, m, h, w, 3, 4)
+        elif self.bilagrid_type == "ppisp":
+            affine_mats = affine_mats.reshape(*affine_mats.shape[:-1], 1, 9)  # (N, m, h, w, 3, 9)
         elif self.bilagrid_type == "loglinear":
             affine_mats = torch.unbind(affine_mats, dim=-1)
             affine_mats = torch.stack([
