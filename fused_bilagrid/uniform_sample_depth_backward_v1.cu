@@ -6,14 +6,14 @@
 namespace cg = cooperative_groups;
 
 #ifdef PATCHED
-__global__ void bilagrid_loglinear_patched_sample_backward_v1_kernel_bilagrid(
+__global__ void bilagrid_depth_patched_sample_backward_v1_kernel_bilagrid(
 #else
-__global__ void bilagrid_loglinear_uniform_sample_backward_v1_kernel_bilagrid(
+__global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_bilagrid(
 #endif
-    const float* __restrict__ bilagrid,  // [N,9,L,H,W]
-    const float* __restrict__ rgb,  // [N,m,h,w,3]
-    const float* __restrict__ v_output,  // [N,m,h,w,3]
-    float* __restrict__ v_bilagrid,  // [N,9,L,H,W]
+    const float* __restrict__ bilagrid,  // [N,2,L,H,W]
+    const float* __restrict__ depth,  // [N,m,h,w,1]
+    const float* __restrict__ v_output,  // [N,m,h,w,1]
+    float* __restrict__ v_bilagrid,  // [N,2,L,H,W]
     int N, int L, int H, int W,
     int m, int h, int w,
 #ifdef PATCHED
@@ -80,7 +80,7 @@ __global__ void bilagrid_loglinear_uniform_sample_backward_v1_kernel_bilagrid(
 #endif
 
     // Result for each affine mat channel
-    float accum[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+    float accum[2] = {0, 0};
 
     // Loop over all samples for this batch
     if (inside)
@@ -117,13 +117,11 @@ __global__ void bilagrid_loglinear_uniform_sample_backward_v1_kernel_bilagrid(
         for (int wi = wi0; wi < wi1; wi++) {
 
         #ifdef PATCHED
-            int g_off = (((ni*m + mi)*h + (hi-offset.y))*w + (wi-offset.x))*3;
+            int g_off = (((ni*m + mi)*h + (hi-offset.y))*w + (wi-offset.x));
         #else
-            int g_off = (((ni*m + mi)*h + hi)*w + wi)*3;
+            int g_off = (((ni*m + mi)*h + hi)*w + wi);
         #endif
-            float sr = rgb[g_off+0];
-            float sg = rgb[g_off+1];
-            float sb = rgb[g_off+2];
+            float sr = depth[g_off];
 
         #ifdef PATCHED
             float x = (float)wi / (float)(w0-1) * (float)(W-1);
@@ -132,7 +130,7 @@ __global__ void bilagrid_loglinear_uniform_sample_backward_v1_kernel_bilagrid(
             float x = (float)wi / (float)(w-1) * (float)(W-1);
             float y = (float)hi / (float)(h-1) * (float)(H-1);
         #endif
-            float z = (kC2G_r * sr + kC2G_g * sg + kC2G_b * sb);
+            float z = sr / (sr + 1.0f);
             z = min(max(z, 0.0f), 1.0f) * (float)(L-1);
 
             int x0 = floorf(x), y0 = floorf(y), z0 = floorf(z);
@@ -156,14 +154,11 @@ __global__ void bilagrid_loglinear_uniform_sample_backward_v1_kernel_bilagrid(
                 if (xi == x1 && yi == y1) accum_t += fx*fy*fz;
             }
 
-            // load diagonals
-            float diags[3];
+            float affine[2];
             #pragma unroll
-            for (int ci_ = 0; ci_ < 3; ci_++) {
-                int ci = 3 * ci_ + ci_;
-
+            for (int ci = 0; ci < 2; ci++) {
                 // base pointer for this volume
-                int base = (ni*9 + ci)*L*H*W;
+                int base = (ni*2 + ci)*L*H*W;
 
                 // fetch 8 corners
                 auto v000 = bilagrid[base+(z0*H+y0)*W+x0];
@@ -184,23 +179,21 @@ __global__ void bilagrid_loglinear_uniform_sample_backward_v1_kernel_bilagrid(
                 float c1 = c10*(1.0f-fy) + c11*fy;
                 float val = c0*(1.0f-fz) + c1*fz;
 
-                diags[ci_] = val;
+                affine[ci] = (ci == 0 ? __expf(val) : val);
             }
+            sr = __logf(sr);
+            float output = __expf(affine[0] * sr + affine[1]);
 
-            float dr = v_output[g_off+0];
-            float dg = v_output[g_off+1];
-            float db = v_output[g_off+2];
+            float dr = v_output[g_off] * output;
 
             #pragma unroll
-            for (int ci = 0; ci < 9; ci++) {
-                int si = ci % 3;
-                int di = ci / 3;
+            for (int ci = 0; ci < 2; ci++) {
 
-                float r_coeff = (si==0 ? sr : si==1 ? sg : sb);
-                float gout = (di==0 ? dr : di==1 ? dg : db);
+                float r_coeff = (ci==0 ? sr : 1.f);
+                float gout = dr;
                 float grad_weight = r_coeff * gout;
-                if (si == di)
-                    grad_weight *= __expf(diags[si]);
+                if (ci == 0)
+                    grad_weight *= affine[ci];
 
                 accum[ci] += accum_t * grad_weight;
             }
@@ -210,13 +203,13 @@ __global__ void bilagrid_loglinear_uniform_sample_backward_v1_kernel_bilagrid(
 
     // Write result
 
-    int out_idx_start = ((ni*9*L + zi)*H + yi)*W + xi;
+    int out_idx_start = ((ni*2*L + zi)*H + yi)*W + xi;
     int out_idx_offset = L*H*W;
 
     // simply write in this case
     if (mult_x*mult_y == 1) {
         #pragma unroll
-        for (int ci = 0; ci < 9; ci++) {
+        for (int ci = 0; ci < 2; ci++) {
             int out_idx = out_idx_start + ci * out_idx_offset;
             if (isfinite(accum[ci]) && accum[ci] != 0.0f)
             #ifdef PATCHED
@@ -231,7 +224,7 @@ __global__ void bilagrid_loglinear_uniform_sample_backward_v1_kernel_bilagrid(
     // out_idx can be different for each thread, fall back to global atomicAdd
     if (mult_x % blockDim.x != 0 || mult_y % blockDim.y != 0) {
         #pragma unroll
-        for (int ci = 0; ci < 9; ci++) {
+        for (int ci = 0; ci < 2; ci++) {
             int out_idx = out_idx_start + ci * out_idx_offset;
             if (isfinite(accum[ci]) && accum[ci] != 0.0f)
                 atomicAdd(v_bilagrid + out_idx, accum[ci]);
@@ -247,7 +240,7 @@ __global__ void bilagrid_loglinear_uniform_sample_backward_v1_kernel_bilagrid(
     int tid = (threadIdx.z * blockDim.y + threadIdx.y) * blockDim.x + threadIdx.x;
 
     #pragma unroll
-    for (int ci = 0; ci < 9; ci++) {
+    for (int ci = 0; ci < 2; ci++) {
         int out_idx = out_idx_start + ci * out_idx_offset;
 
         sharedData[tid] = isfinite(accum[ci]) ? accum[ci] : 0.0f;
@@ -267,14 +260,14 @@ __global__ void bilagrid_loglinear_uniform_sample_backward_v1_kernel_bilagrid(
 
 
 #ifdef PATCHED
-__global__ void bilagrid_loglinear_patched_sample_backward_v1_kernel_rgb(
+__global__ void bilagrid_depth_patched_sample_backward_v1_kernel_depth(
 #else
-__global__ void bilagrid_loglinear_uniform_sample_backward_v1_kernel_rgb(
+__global__ void bilagrid_depth_uniform_sample_backward_v1_kernel_depth(
 #endif
-    const float* __restrict__ bilagrid,  // [N,9,L,H,W]
-    const float* __restrict__ rgb,  // [N,m,h,w,3]
-    const float* __restrict__ v_output,  // [N,m,h,w,3]
-    float* __restrict__ v_rgb,  // [N,m,h,w,3]
+    const float* __restrict__ bilagrid,  // [N,2,L,H,W]
+    const float* __restrict__ depth,  // [N,m,h,w,1]
+    const float* __restrict__ v_output,  // [N,m,h,w,1]
+    float* __restrict__ v_depth,  // [N,m,h,w,1]
     int N, int L, int H, int W,
     int m, int h, int w
 #ifdef PATCHED
@@ -293,14 +286,10 @@ __global__ void bilagrid_loglinear_uniform_sample_backward_v1_kernel_rgb(
     int ni = tmp;
 
     // input and output colors
-    int g_off = (((ni * m + mi) * h + hi) * w + wi) * 3;
-    float sr = rgb[g_off+0];
-    float sg = rgb[g_off+1];
-    float sb = rgb[g_off+2];
-    float dr = v_output[g_off+0];
-    float dg = v_output[g_off+1];
-    float db = v_output[g_off+2]; 
-    float vr = 0.0, vg = 0.0, vb = 0.0;
+    int g_off = (((ni * m + mi) * h + hi) * w + wi);
+    float sr = depth[g_off];
+    float dr = v_output[g_off];
+    float vr = 0.0;
 
     // grid coords
 #ifdef PATCHED
@@ -311,7 +300,7 @@ __global__ void bilagrid_loglinear_uniform_sample_backward_v1_kernel_rgb(
     float x = (float)wi / (float)(w-1) * (float)(W-1);
     float y = (float)hi / (float)(h-1) * (float)(H-1);
 #endif
-    float z = (kC2G_r * sr + kC2G_g * sg + kC2G_b * sb) * (L-1);
+    float z = (sr / (sr + 1.0f)) * (L-1);
     int x0 = floorf(x), y0 = floorf(y), z0 = floorf(z);
     int x1 = min(x0+1, W-1);
     int y1 = min(y0+1, H-1);
@@ -329,30 +318,27 @@ __global__ void bilagrid_loglinear_uniform_sample_backward_v1_kernel_rgb(
     float w110 = (1-fx)*fy*fz;
     float w111 = fx*fy*fz;
 
-    // accumulate bilagrid gradient over 9 channels
-    float post_exp[3];
+    // accumulate bilagrid gradient over 2 channels
+    float affine[2];
     #pragma unroll
-    for (int si = 0; si < 3; si++) {
-        #pragma unroll
-        for (int di = 0; di < 3; di++) {
-            int ci = 3 * di + si;
-            float gout = (di==0 ? dr : di==1 ? dg : db);
-
-            int base = ((ni*9 + ci)*L*H*W);
-            float val =
-                bilagrid[base+(z0*H+y0)*W+x0] * w000 +
-                bilagrid[base+(z0*H+y0)*W+x1] * w001 +
-                bilagrid[base+(z0*H+y1)*W+x0] * w010 +
-                bilagrid[base+(z0*H+y1)*W+x1] * w011 +
-                bilagrid[base+(z1*H+y0)*W+x0] * w100 +
-                bilagrid[base+(z1*H+y0)*W+x1] * w101 +
-                bilagrid[base+(z1*H+y1)*W+x0] * w110 +
-                bilagrid[base+(z1*H+y1)*W+x1] * w111;
-            if (si == di)
-                val = __expf(val), post_exp[si] = val;
-            (si == 0 ? vr : si == 1 ? vg : vb) += val * gout;
-        }
+    for (int ci = 0; ci < 2; ci++) {
+        int base = ((ni*2 + ci)*L*H*W);
+        float val =
+            bilagrid[base+(z0*H+y0)*W+x0] * w000 +
+            bilagrid[base+(z0*H+y0)*W+x1] * w001 +
+            bilagrid[base+(z0*H+y1)*W+x0] * w010 +
+            bilagrid[base+(z0*H+y1)*W+x1] * w011 +
+            bilagrid[base+(z1*H+y0)*W+x0] * w100 +
+            bilagrid[base+(z1*H+y0)*W+x1] * w101 +
+            bilagrid[base+(z1*H+y1)*W+x0] * w110 +
+            bilagrid[base+(z1*H+y1)*W+x1] * w111;
+        if (ci == 0)
+            val = __expf(val);
+        affine[ci] = val;
     }
+    float log_sr = __logf(sr);
+    dr *= __expf(affine[0] * log_sr + affine[1]);
+    vr += affine[0] * dr / sr;
 
     // spatial derivatives for coords
     float dwdz[8] = {
@@ -362,7 +348,7 @@ __global__ void bilagrid_loglinear_uniform_sample_backward_v1_kernel_rgb(
          (1-fx)*fy,      fx*fy
     };
 
-    // accumulate gradient into coords (chain through bilagrid values and rgb)
+    // accumulate gradient into coords (chain through bilagrid values and depth)
     float gz_grad = 0.f;
     #pragma unroll
     for (int corner = 0; corner < 8; ++corner) {
@@ -370,25 +356,18 @@ __global__ void bilagrid_loglinear_uniform_sample_backward_v1_kernel_rgb(
         int yi = (corner & 2) ? y1 : y0;
         int zi = (corner & 4) ? z1 : z0;
         float trilerp = 0.f;
-        // gather the corresponding bilagrid value for each of the 9 channels
+        // gather the corresponding bilagrid value for each of the 2 channels
         #pragma unroll
-        for (int ci = 0; ci < 9; ++ci) {
-            const float* vol = bilagrid + ((ni*9 + ci)*L*H*W);
+        for (int ci = 0; ci < 2; ++ci) {
+            const float* vol = bilagrid + ((ni*2 + ci)*L*H*W);
             float v = vol[(zi*H + yi)*W + xi];
-            int si = ci % 3, di = ci / 3;
-            if (si == di)
-                v *= post_exp[si];
-            float r_coeff = (si==0 ? sr : si==1 ? sg : sb);
-            float gout = (di==0 ? dr : di==1 ? dg : db);
+            float r_coeff = (ci==0 ? log_sr * affine[ci] : 1.f);
+            float gout = dr;
             trilerp += v * r_coeff * gout;
         }
         gz_grad += dwdz[corner] * (L-1) * trilerp;
     }
-    vr += kC2G_r * gz_grad;
-    vg += kC2G_g * gz_grad;
-    vb += kC2G_b * gz_grad;
-    v_rgb[g_off+0] = isfinite(vr) ? vr : 0.0f;
-    v_rgb[g_off+1] = isfinite(vg) ? vg : 0.0f;
-    v_rgb[g_off+2] = isfinite(vb) ? vb : 0.0f;
+    vr += gz_grad / ((sr+1.0f) * (sr+1.0f));
+    v_depth[g_off] = isfinite(vr) ? vr : 0.0f;
 }
 

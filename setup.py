@@ -80,6 +80,7 @@ setup(
                 "fused_bilagrid/uniform_sample.cu",
                 "fused_bilagrid/uniform_sample_ppisp.cu",
                 "fused_bilagrid/uniform_sample_loglinear.cu",
+                "fused_bilagrid/uniform_sample_depth.cu",
                 "fused_bilagrid/tv_loss_forward.cu",
                 "fused_bilagrid/tv_loss_backward.cu",
                 "fused_bilagrid/ext.cpp"

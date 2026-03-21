@@ -106,6 +106,11 @@ void tv_loss_forward(
             bilagrid, tv_loss,
             N, L, H, W
         );
+    else if (C == 2)
+        tv_loss_forward_kernel<2><<<bounds, block, 0, stream>>>(
+            bilagrid, tv_loss,
+            N, L, H, W
+        );
     CHECK_DEVICE_ERROR;
 }
 
@@ -179,6 +184,11 @@ void channel_mean_forward(
         );
     else if (C == 9)
         channel_mean_forward_kernel<9><<<bounds, block, 0, stream>>>(
+            bilagrid, channel_mean,
+            N, L, H, W
+        );
+    else if (C == 2)
+        channel_mean_forward_kernel<2><<<bounds, block, 0, stream>>>(
             bilagrid, channel_mean,
             N, L, H, W
         );

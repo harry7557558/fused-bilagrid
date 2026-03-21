@@ -84,6 +84,11 @@ void tv_loss_backward(
         <<<grid, block, 0, stream>>>(
             bilagrid, v_tv_loss, v_bilagrid, N, L, H, W
         );
+    else if (C == 2)
+        (inplace ? tv_loss_backward_kernel<2, true> : tv_loss_backward_kernel<2, false>)
+        <<<grid, block, 0, stream>>>(
+            bilagrid, v_tv_loss, v_bilagrid, N, L, H, W
+        );
     CHECK_DEVICE_ERROR;
 }
 
@@ -138,6 +143,11 @@ void channel_mean_backward(
         );
     else if (C == 9)
         (inplace ? channel_mean_backward_kernel<9, true> : channel_mean_backward_kernel<9, false>)
+        <<<grid, block, 0, stream>>>(
+            v_tv_loss, v_bilagrid, N, L, H, W
+        );
+    else if (C == 2)
+        (inplace ? channel_mean_backward_kernel<2, true> : channel_mean_backward_kernel<2, false>)
         <<<grid, block, 0, stream>>>(
             v_tv_loss, v_bilagrid, N, L, H, W
         );

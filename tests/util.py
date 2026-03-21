@@ -9,9 +9,11 @@ from typing import List, Tuple, Callable
 
 def assert_close(x, y, tol, name: str):
     assert x.shape == y.shape, (x.shape, y.shape)
-    err = torch.amax(torch.abs(y - x)).item()
-    print(f"{name}: maxerr = {err:.2g}")
-    assert err <= tol
+    abserr = torch.amax(torch.abs(y - x)).item()
+    # relerr = torch.abs(y - x).mean() / torch.fmax(torch.abs(x).mean(), torch.abs(y).mean())
+    relerr = abserr / torch.fmax(torch.abs(x).mean(), torch.abs(y).mean())
+    print(f"{name}: abserr = {abserr:.2g}, relerr = {relerr:.2g}")
+    assert relerr <= tol
 
 
 def timeit(fun: Callable, name: str, repeat=20):

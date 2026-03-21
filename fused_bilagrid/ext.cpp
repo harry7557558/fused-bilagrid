@@ -19,6 +19,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def("bilagrid_loglinear_uniform_sample_backward", &bilagrid_loglinear_uniform_sample_backward_tensor);
     m.def("bilagrid_loglinear_patched_sample_forward", &bilagrid_loglinear_patched_sample_forward_tensor);
     m.def("bilagrid_loglinear_patched_sample_backward", &bilagrid_loglinear_patched_sample_backward_tensor);
+    m.def("bilagrid_depth_uniform_sample_forward", &bilagrid_depth_uniform_sample_forward_tensor);
+    m.def("bilagrid_depth_uniform_sample_backward", &bilagrid_depth_uniform_sample_backward_tensor);
+    m.def("bilagrid_depth_patched_sample_forward", &bilagrid_depth_patched_sample_forward_tensor);
+    m.def("bilagrid_depth_patched_sample_backward", &bilagrid_depth_patched_sample_backward_tensor);
     m.def("tv_loss_forward", &tv_loss_forward_tensor);
     m.def("tv_loss_backward", &tv_loss_backward_tensor);
     m.def("tv_loss_backward_inplace", &tv_loss_backward_inplace_tensor);
