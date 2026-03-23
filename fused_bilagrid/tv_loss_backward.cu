@@ -61,9 +61,9 @@ __global__ void tv_loss_backward_kernel(
 
 
 void tv_loss_backward(
-    const float* __restrict__ bilagrid,
+    const float* bilagrid,
     const float v_tv_loss,
-    float* __restrict__ v_bilagrid,
+    float* v_bilagrid,
     int N, int C, int L, int H, int W, bool inplace,
     cudaStream_t stream
 ) {
