@@ -603,6 +603,15 @@ def color_correct(
         - Both input and reference images should be in the range [0, 1].
         - The function works with any number of channels, but typically used with 3 (RGB).
     """
+
+    def my_lstsq(A, B):
+        """Avoid OOM with torch.linalg.lstsq"""
+        dtype, device = A.dtype, A.device
+        ATA = torch.matmul(A.t(), A)
+        ATB = torch.matmul(A.t(), B)
+        beta = torch.linalg.solve(ATA.cpu().double(), ATB.cpu().double())
+        return beta.to(dtype=dtype, device=device)
+
     if img.shape[-1] != ref.shape[-1]:
         raise ValueError(
             f"img's {img.shape[-1]} and ref's {ref.shape[-1]} channels must match"
@@ -637,7 +646,8 @@ def color_correct(
             mask = mask0[:, c] & is_unclipped(img_mat[:, c]) & is_unclipped(b)
             ma_mat = torch.where(mask[:, None], a_mat, torch.zeros_like(a_mat))
             mb = torch.where(mask, b, torch.zeros_like(b))
-            w = torch.linalg.lstsq(ma_mat, mb, rcond=-1)[0]
+            # w = torch.linalg.lstsq(ma_mat, mb, rcond=-1)[0]
+            w = my_lstsq(ma_mat, mb)
             assert torch.all(torch.isfinite(w))
             warp.append(w)
         warp = torch.stack(warp, dim=-1)
